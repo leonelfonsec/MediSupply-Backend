@@ -1,0 +1,17 @@
+version: "3.9"
+services:
+  api:
+    build: .
+    env_file: .env
+    ports: ["8080:8080"]
+    depends_on: [postgres, redis]
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: catalog
+      POSTGRES_PASSWORD: catalog
+      POSTGRES_DB: catalog
+    ports: ["5434:5432"]
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
