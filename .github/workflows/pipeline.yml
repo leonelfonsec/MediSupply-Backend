@@ -1,4 +1,4 @@
-name: Hola mundo
+name: Pipeline MediSupply-Backend
 on:
   push:
     branches: [ main ]
@@ -9,6 +9,6 @@ jobs:
     steps:
     - name: Imprimir 
       env:
-        MI_VARIABLE: Hola mundo
+        MI_VARIABLE: Hola mundo backend
       run: |
         echo $MI_VARIABLE.
