@@ -1,0 +1,64 @@
+name: 02 - Auto PR a develop (si "integrar")
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'feat/**'
+      - 'historia**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto_pr:
+    name: Crear/actualizar PR -> develop
+    # Solo si el último commit del push contiene la palabra "integrar"
+    if: contains(github.event.head_commit.message, 'integrar')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar GH CLI
+        uses: cli/cli@v2
+        with:
+          version: latest
+
+      - name: Crear/actualizar PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+
+          # Si ya hay un PR abierto de esta rama hacia develop, no creamos uno nuevo
+          EXISTING_COUNT=$(gh pr list --head "$BRANCH_NAME" --base develop --state open --json number --jq 'length')
+          if [ "$EXISTING_COUNT" -gt 0 ]; then
+            echo "PR ya existe para $BRANCH_NAME -> develop. Nada que hacer."
+            exit 0
+          fi
+
+          # Crear PR
+          gh pr create \
+            --head "$BRANCH_NAME" \
+            --base develop \
+            --title "Auto PR: $BRANCH_NAME → develop" \
+            --body "Creado automáticamente al detectar 'integrar' en el commit y pasar CI.\n\n> Rama: \`$BRANCH_NAME\`"
+
+      # Opcional: etiquetar/auto-asignar
+      - name: Añadir etiquetas (opcional)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          set -e
+          PR_NUMBER=$(gh pr list --head "$BRANCH_NAME" --base develop --state open --json number --jq '.[0].number')
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --add-label "auto-pr,ci"
+          fi
