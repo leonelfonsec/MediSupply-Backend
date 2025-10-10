@@ -1,6 +1,6 @@
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Producto, Inventario
+from app.models.catalogo_model import Producto, Inventario
 from typing import Optional
 
 async def buscar_productos(session: AsyncSession, *,
@@ -16,13 +16,23 @@ async def buscar_productos(session: AsyncSession, *,
     if codigo:
         stmt = stmt.where(Producto.codigo == codigo)
 
-    # Orden
+    # Para contar, crear consulta separada SIN order by
+    count_stmt = select(func.count()).select_from(Producto).where(Producto.activo.is_(True))
+    if q:
+        count_stmt = count_stmt.where(func.lower(Producto.nombre).like(f"%{q.lower()}%"))
+    if categoriaId:
+        count_stmt = count_stmt.where(Producto.categoria_id == categoriaId)
+    if codigo:
+        count_stmt = count_stmt.where(Producto.codigo == codigo)
+    
+    total = (await session.execute(count_stmt)).scalar_one()
+
+    # Orden para la consulta de datos
     if sort == "precio":
         stmt = stmt.order_by(Producto.precio_unitario.asc())
     else:
         stmt = stmt.order_by(Producto.nombre.asc())
 
-    total = (await session.execute(stmt.with_only_columns(func.count()))).scalar_one()
     rows = (await session.execute(stmt.offset((page-1)*size).limit(size))).scalars().all()
 
     # inventario resumen (agregado por SKU)

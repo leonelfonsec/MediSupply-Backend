@@ -60,7 +60,7 @@ async def list_items(
 async def get_product(id: str, session=Depends(get_session)):
     # …consulta sencilla por id (similar al repo)
     from sqlalchemy import select
-    from app.models import Producto
+    from app.models.catalogo_model import Producto
     row = (await session.execute(select(Producto).where(Producto.id==id))).scalar_one_or_none()
     if not row:
         return {"detail":"Not found"}, 404

@@ -1,7 +1,6 @@
-from sqlalchemy.orm import declarative_base, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import String, Integer, Boolean, Date, ForeignKey, DECIMAL
-
-Base = declarative_base()
+from app.db import Base
 
 class Producto(Base):
     __tablename__ = "producto"

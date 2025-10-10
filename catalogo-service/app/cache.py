@@ -1,4 +1,4 @@
-import aioredis
+import redis.asyncio as redis
 from app.config import settings
 
 _redis = None
@@ -6,7 +6,7 @@ _redis = None
 async def get_redis():
     global _redis
     if _redis is None:
-        _redis = await aioredis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+        _redis = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
     return _redis
 
 def search_key(q=None, categoriaId=None, codigo=None, pais=None, bodegaId=None, page=1, size=20, sort=None):
