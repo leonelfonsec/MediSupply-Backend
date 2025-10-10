@@ -14,51 +14,43 @@ permissions:
 jobs:
   auto_pr:
     name: Crear/actualizar PR -> develop
-    # Solo si el último commit del push contiene la palabra "integrar"
     if: contains(github.event.head_commit.message, 'integrar')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Instalar GH CLI
-        uses: cli/cli@v2
-        with:
-          version: latest
+      - name: Autenticar GH CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh --version
+          gh auth status || echo "$GH_TOKEN" | gh auth login --with-token
 
-      - name: Crear/actualizar PR
+      - name: Crear PR si no existe
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH_NAME: ${{ github.ref_name }}
         run: |
           set -e
-
-          # Si ya hay un PR abierto de esta rama hacia develop, no creamos uno nuevo
-          EXISTING_COUNT=$(gh pr list --head "$BRANCH_NAME" --base develop --state open --json number --jq 'length')
-          if [ "$EXISTING_COUNT" -gt 0 ]; then
-            echo "PR ya existe para $BRANCH_NAME -> develop. Nada que hacer."
-            exit 0
+          COUNT=$(gh pr list --head "$BRANCH_NAME" --base develop --state open --json number --jq 'length')
+          if [ "$COUNT" -eq 0 ]; then
+            gh pr create --head "$BRANCH_NAME" --base develop \
+              --title "Auto PR: $BRANCH_NAME → develop" \
+              --body "Creado automáticamente al detectar 'integrar' en el commit."
+          else
+            echo "PR ya existe para $BRANCH_NAME -> develop."
           fi
 
-          # Crear PR
-          gh pr create \
-            --head "$BRANCH_NAME" \
-            --base develop \
-            --title "Auto PR: $BRANCH_NAME → develop" \
-            --body "Creado automáticamente al detectar 'integrar' en el commit y pasar CI.\n\n> Rama: \`$BRANCH_NAME\`"
-
-      # Opcional: etiquetar/auto-asignar
-      - name: Añadir etiquetas (opcional)
-        if: always()
+      - name: Activar auto-merge (opcional)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH_NAME: ${{ github.ref_name }}
         run: |
-          set -e
-          PR_NUMBER=$(gh pr list --head "$BRANCH_NAME" --base develop --state open --json number --jq '.[0].number')
-          if [ -n "$PR_NUMBER" ]; then
-            gh pr edit "$PR_NUMBER" --add-label "auto-pr,ci"
+          PR=$(gh pr list --head "$BRANCH_NAME" --base develop --state open --json number --jq '.[0].number')
+          if [ -n "$PR" ]; then
+            # --merge hace merge commit; usa --squash si prefieres squash
+            gh pr merge "$PR" --merge --auto || echo "Auto-merge pendiente de checks/permissions."
           fi
