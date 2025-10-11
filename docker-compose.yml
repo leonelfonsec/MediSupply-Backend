@@ -132,6 +132,20 @@ services:
       - type: bind
         source: ./catalogo-service
         target: /app
+    
+  # === Servicio de rutas (FastAPI) ===
+  backend:
+    build:
+      context: ./ruta-service
+    container_name: fastapi-backend
+    restart: always
+    env_file: .env
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ruta-service:/app
         
 volumes:
   pgdata:
