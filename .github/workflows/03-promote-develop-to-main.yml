@@ -1,0 +1,106 @@
+name: "03 - Promote develop -> main"
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [ develop ]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  create_pr_to_main:
+    name: Crear PR -> main con auto-merge
+    # Solo ejecutar si:
+    # 1. El PR fue mergeado (no solo cerrado)
+    # 2. Y tiene la palabra 'promover' en título, body o labels
+    if: >
+      github.event.pull_request.merged == true &&
+      (
+        contains(join(github.event.pull_request.labels.*.name, ','), 'promover') ||
+        contains(github.event.pull_request.title, 'promover') ||
+        contains(github.event.pull_request.body, 'promover')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Debug info
+        run: |
+          echo "🔍 Información del PR mergeado:"
+          echo "   Merged: ${{ github.event.pull_request.merged }}"
+          echo "   Title: ${{ github.event.pull_request.title }}"
+          echo "   Labels: ${{ join(github.event.pull_request.labels.*.name, ',') }}"
+          echo "   Base: ${{ github.event.pull_request.base.ref }}"
+
+      - name: Crear PR develop -> main
+        id: create_or_find_pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PAT_TOKEN }}
+          result-encoding: string
+          script: |
+            const { owner, repo } = context.repo;
+            const head = 'develop';
+            const base = 'main';
+
+            // Buscar PR existente
+            const prs = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', base, per_page: 100
+            });
+            let pr = prs.find(p => p.head?.ref === head);
+
+            if (!pr) {
+              // Crear nuevo PR
+              const title = `🚀 Promote: ${head} → ${base} [promover]`;
+              const body = `
+              ## 🚀 PR Automático de Promoción
+              
+              Este PR fue creado automáticamente después del merge a \`develop\`.
+              
+              - ✅ Código revisado y probado en develop
+              - 🔄 Auto-merge activado
+              - 📦 Listo para producción
+              
+              **Trigger:** Merge con palabra clave "promover"
+              **Palabra clave:** promover
+              `;
+              
+              const { data } = await github.rest.pulls.create({ 
+                owner, repo, head, base, title, body 
+              });
+              pr = data;
+              
+              // Agregar labels
+              try {
+                await github.rest.issues.addLabels({
+                  owner, repo, 
+                  issue_number: pr.number, 
+                  labels: ['automerge', 'promover', 'production']
+                });
+                core.info(`🏷️ Labels agregadas`);
+              } catch (e) { 
+                core.warning(`⚠️ No se pudieron agregar labels: ${e.message}`); 
+              }
+              
+              core.info(`✅ PR creado: #${pr.number} → ${pr.html_url}`);
+            } else {
+              core.info(`✅ PR ya existe: #${pr.number} → ${pr.html_url}`);
+            }
+
+            return String(pr.number);
+
+      - name: Enable auto-merge
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          pull-request-number: ${{ steps.create_or_find_pr.outputs.result }}
+          merge-method: squash
+          
+      - name: Success message
+        run: |
+          echo "✅ PR #${{ steps.create_or_find_pr.outputs.result }} creado/actualizado"
+          echo "🔄 Auto-merge activado - se mergeará cuando pasen los checks"
