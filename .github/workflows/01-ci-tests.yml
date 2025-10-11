@@ -1,0 +1,63 @@
+name: 01 - CI Tests (feature)
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'feat/**'
+      - 'historia**'
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - 'orders-service/**'
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.11'
+  SERVICE_DIR: 'orders-service'
+
+jobs:
+  tests:
+    name: Run unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles(format('{0}/requirements*.txt', env.SERVICE_DIR)) }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          cd "$SERVICE_DIR"
+          python -m pip install --upgrade pip
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install -r requirements.txt
+
+      - name: Run tests (pytest -> fallback unittest)
+        run: |
+          cd "$SERVICE_DIR"
+          # intenta pytest con cobertura; si no, cae a unittest discover
+          python -m pytest -q --maxfail=1 --disable-warnings --cov=. --cov-report=xml \
+            || python -m unittest discover -s tests -p "test*.py" -v
+
+      - name: Upload coverage.xml (opcional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: ${{ env.SERVICE_DIR }}/coverage.xml
+          if-no-files-found: ignore

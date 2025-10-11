@@ -1,21 +1,35 @@
+# tests/conftest.py
+import importlib
 import pytest
 from fastapi.testclient import TestClient
-
-# --- App FastAPI ---
-from app.main import app as fastapi_app
-
-# Si tu código usa Depends(get_session) para DB:
-# ajusta estos imports a tus nombres reales
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from app.models import Base  # tu declarative base
-from app.db import get_session  # tu dependencia de Session
 
-# --- Cliente HTTP síncrono (vale para la mayoría de endpoints) ---
+from app.main import app as fastapi_app
+from app.db import get_session
+from app.models import Base
+
+# -----------------------------
+# TestClient con lifespan real
+# -----------------------------
 @pytest.fixture()
-def client():
-    return TestClient(fastapi_app)
+def client(test_engine, monkeypatch):
+    """
+    TestClient con lifespan + engine parcheado a SQLite en memoria.
+    Evita conexiones a Postgres durante el on_startup.
+    """
+    import app.main as main_mod
+    import app.db as db_mod
 
-# --- DB SQLite en memoria y override de dependencia ---
+    # Parchar ambos módulos a usar el engine de pruebas
+    monkeypatch.setattr(main_mod, "engine", test_engine, raising=True)
+    monkeypatch.setattr(db_mod, "engine", test_engine, raising=True)
+
+    # Lifespan activo para que cuenten líneas de startup/shutdown en cobertura
+    with TestClient(fastapi_app) as c:
+        yield c
+# -----------------------------
+# Engine SQLite en memoria
+# -----------------------------
 @pytest.fixture(scope="session")
 async def test_engine():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
@@ -26,36 +40,63 @@ async def test_engine():
     finally:
         await engine.dispose()
 
+# -----------------------------
+# Sesión para PRE-SEMBRAR datos
+# -----------------------------
 @pytest.fixture
 async def test_session(test_engine):
-    session_maker = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
-    async with session_maker() as s:
-        yield s
-        await s.rollback()
+    Session = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
+    async with Session() as s:
+        try:
+            yield s
+        finally:
+            await s.rollback()
 
+# -----------------------------
+# OVERRIDE por REQUEST (clave)
+#   - Crea una AsyncSession NUEVA por request del cliente
+#   - No reutiliza test_session
+# -----------------------------
 @pytest.fixture(autouse=True)
-def override_db(test_session):
+def override_db(test_engine, monkeypatch):
+    Session = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
+
     async def _override():
-        yield test_session
+        async with Session() as s:
+            yield s
+
+    # FastAPI Depends(...)
     fastapi_app.dependency_overrides[get_session] = _override
+
+    # Si algún módulo importa app.db.get_session directamente, lo forzamos también
+    dbmod = importlib.import_module("app.db")
+    monkeypatch.setattr(dbmod, "get_session", _override)
+
     yield
     fastapi_app.dependency_overrides.clear()
 
-# --- Redis falso (si usas redis.Redis en tu código) ---
+# -----------------------------
+# Redis falso
+# -----------------------------
 @pytest.fixture(autouse=True)
 def fake_redis(monkeypatch):
-    import fakeredis
-    import redis
+    import fakeredis, redis
     r = fakeredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(redis, "Redis", lambda *a, **k: r)
     return r
 
-# --- Celery en modo eager (las tareas se ejecutan al instante) ---
+# -----------------------------
+# Celery dummy (evita kombu/redis reales)
+# -----------------------------
 @pytest.fixture(autouse=True)
-def celery_eager(monkeypatch):
-    try:
-        from app.celery_worker import celery_app
-        celery_app.conf.task_always_eager = True
-        celery_app.conf.task_eager_propagates = True
-    except Exception:
-        pass
+def _replace_celery_object(monkeypatch):
+    main = importlib.import_module("app.main")
+
+    class _DummyCelery:
+        def __init__(self):
+            self.calls = []
+        def send_task(self, name, args=None, kwargs=None, **kw):
+            self.calls.append((name, args, kwargs))
+            return None
+
+    monkeypatch.setattr(main, "celery", _DummyCelery())
