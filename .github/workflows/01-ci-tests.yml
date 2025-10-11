@@ -6,14 +6,15 @@ on:
       - 'feature/**'
       - 'feat/**'
       - 'historia**'
-  pull_request:
-    branches:
-      - develop
-    paths:
-      - 'orders-service/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
+  issues: write
 
 env:
   PYTHON_VERSION: '3.11'
@@ -21,20 +22,16 @@ env:
 
 jobs:
   tests:
-    name: Run unit tests
+    name: Ejecutar unit tests
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Cache pip
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles(format('{0}/requirements*.txt', env.SERVICE_DIR)) }}
@@ -47,17 +44,147 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
           pip install -r requirements.txt
+          pip install pytest pytest-cov coverage
 
-      - name: Run tests (pytest -> fallback unittest)
+      - name: Run tests (pytest + coverage.xml)
         run: |
           cd "$SERVICE_DIR"
-          # intenta pytest con cobertura; si no, cae a unittest discover
-          python -m pytest -q --maxfail=1 --disable-warnings --cov=. --cov-report=xml \
-            || python -m unittest discover -s tests -p "test*.py" -v
+          pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch
+          python -m coverage xml -i -o coverage.xml
 
-      - name: Upload coverage.xml (opcional)
+      - name: Upload coverage.xml
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
           path: ${{ env.SERVICE_DIR }}/coverage.xml
-          if-no-files-found: ignore
+          if-no-files-found: error
+
+      - name: Build & Upload HTML coverage
+        run: |
+          cd "$SERVICE_DIR"
+          python -m coverage html -i -d htmlcov
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-${{ github.run_id }}
+          path: ${{ env.SERVICE_DIR }}/htmlcov
+          retention-days: 7
+
+  sonar:
+    name: SonarCloud análisis (rama feature)
+    needs: [tests]
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: "${{ secrets.SONAR_TOKEN }}"
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Download coverage.xml
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-xml
+          path: ${{ env.SERVICE_DIR }}
+
+      - name: Ensure coverage file exists
+        run: test -f ${{ env.SERVICE_DIR }}/coverage.xml
+
+      - name: SonarCloud Scan (orders-service)
+        uses: SonarSource/sonarcloud-github-action@v2
+        with:
+          projectBaseDir: ${{ env.SERVICE_DIR }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ========================================
+  # ⚠️ COMENTADO: Requiere permisos de organización
+  # Para habilitar:
+  # 1. Owner de la org debe ir a: https://github.com/organizations/MediSupply-Team/settings/actions
+  # 2. Marcar "Allow GitHub Actions to create and approve pull requests"
+  # 3. O configurar PAT_TOKEN como Organization secret
+  # 4. Descomentar el job completo
+  # ========================================
+  
+  # auto_pr:
+  #   name: Crear PR -> develop
+  #   needs: [sonar]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with: { fetch-depth: 0 }
+  #
+  #     - name: Crear PR si no existe
+  #       uses: actions/github-script@v7
+  #       with:
+  #         github-token: ${{ secrets.PAT_TOKEN }}
+  #         script: |
+  #           const { owner, repo } = context.repo;
+  #           const head = context.ref.replace('refs/heads/', '');
+  #           const base = 'develop';
+  #           
+  #           // Buscar PR existente
+  #           const prs = await github.paginate(github.rest.pulls.list, { 
+  #             owner, repo, state: 'open', base, per_page: 100 
+  #           });
+  #           const existing = prs.find(pr => pr.head?.ref === head);
+  #           
+  #           if (existing) { 
+  #             core.info(`✅ PR ya existe: #${existing.number} → ${existing.html_url}`);
+  #             return;
+  #           }
+  #           
+  #           // Crear nuevo PR
+  #           const title = `Auto PR: ${head} → ${base} [integrar]`;
+  #           const body  = `
+  #           ## 🤖 PR Automático
+  #           
+  #           Creado tras pasar Tests + Sonar en la rama feature.
+  #           
+  #           - ✅ Tests ejecutados
+  #           - ✅ SonarCloud análisis completado
+  #           - 🔄 Auto-merge activado (se hará merge cuando pasen los checks del PR)
+  #           
+  #           **Palabra clave:** integrar
+  #           `;
+  #           
+  #           const { data: pr } = await github.rest.pulls.create({ 
+  #             owner, repo, head, base, title, body 
+  #           });
+  #           
+  #           // Agregar label para auto-merge
+  #           try {
+  #             await github.rest.issues.addLabels({
+  #               owner, repo, 
+  #               issue_number: pr.number, 
+  #               labels: ['automerge', 'integrar']
+  #             });
+  #             core.info(`🏷️ Labels 'automerge' e 'integrar' agregadas`);
+  #           } catch (e) { 
+  #             core.warning(`⚠️ No se pudo agregar label: ${e.message}`); 
+  #           }
+  #           
+  #           core.info(`✅ PR creado: #${pr.number} → ${pr.html_url}`);
+  
+  # ========================================
+  # ✅ ACTIVO: Notificación para crear PR manual
+  # ========================================
+  
+  notify_ready:
+    name: ✅ Tests pasados - Listo para PR
+    needs: [sonar]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Crear summary con link al PR
+        run: |
+          echo "## ✅ Tests y SonarCloud pasaron correctamente" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "La rama \`${GITHUB_REF_NAME}\` está lista para integrarse a \`develop\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📝 Siguiente paso:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**[🔗 Crear PR a develop](https://github.com/${{ github.repository }}/compare/develop...${GITHUB_REF_NAME})**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "O usa el CLI:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "gh pr create --base develop --head ${GITHUB_REF_NAME} --title \"feat: ${GITHUB_REF_NAME} → develop\" --body \"Tests y Sonar pasaron ✅\"" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
