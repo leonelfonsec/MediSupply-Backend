@@ -14,6 +14,7 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 env:
   PYTHON_VERSION: '3.11'
@@ -73,6 +74,8 @@ jobs:
     name: SonarCloud análisis (rama feature)
     needs: [tests]
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: "${{ secrets.SONAR_TOKEN }}"
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -104,7 +107,7 @@ jobs:
       - name: Crear PR si no existe
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PAT_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const head = context.ref.replace('refs/heads/', '');
