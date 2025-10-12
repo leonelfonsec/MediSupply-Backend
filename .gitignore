@@ -1,2 +1,17 @@
 .venv
 __pycache__
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+
+# tfvars reales (mantén solo .example en git)
+*.tfvars
+!terraform.tfvars.example
