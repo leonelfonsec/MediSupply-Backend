@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [orders-service, catalogo-service]
+        service: [orders-service, catalogo-service, cliente-service]
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        service: [orders-service, catalogo-service]
+        service: [orders-service, catalogo-service, cliente-service]
     env:
       SONAR_TOKEN: "${{ secrets.SONAR_TOKEN }}"
     steps:
