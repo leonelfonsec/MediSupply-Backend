@@ -48,5 +48,78 @@ services:
       retries: 30
     restart: unless-stopped
 
+  catalog-db:
+    image: postgres:16-alpine
+    container_name: catalog-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: catalogo
+    ports:
+      - "5433:5432"  # Puerto diferente para no conflicto
+    volumes:
+      - catalog_pgdata:/var/lib/postgresql/data
+      - ./catalogo-service/data/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d catalogo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  
+  # === Inicialización de la base de datos "catalogo" ===
+  db-init-catalog:
+    image: python:3.11-slim-bookworm
+    depends_on:
+      catalog-db:
+        condition: service_healthy
+    environment:
+      PGHOST: catalog-db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TARGET_DB: catalogo
+    volumes:
+      - ./catalogo-service/app/create_catalogo_db.py:/app/create_catalogo_db.py:ro
+    working_dir: /app
+    command: >
+      bash -lc "pip install -q 'psycopg[binary]>=3.1,<4' && python create_catalogo_db.py"
+    restart: "no"
+
+  # === Servicio principal de Catalogo (FastAPI) ===
+  catalog-service:
+    build:
+      context: ./catalogo-service
+      dockerfile: Dockerfile
+    container_name: catalog-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@catalog-db:5432/catalogo
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1  # Base de datos Redis diferente
+    working_dir: /app
+    depends_on:
+      catalog-db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      db-init-catalog: { condition: service_completed_successfully }
+    ports: ["3001:8080"]  # Puerto diferente al orders-service
+    profiles: ["${APP_PROFILE:-dev}"]
+    volumes:
+      - type: bind
+        source: ./catalogo-service
+        target: /app
+    
+  # === Servicio de rutas (FastAPI) ===
+  backend:
+    build:
+      context: ./ruta-service
+    container_name: fastapi-backend
+    restart: always
+    env_file: .env
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ruta-service:/app
+        
 volumes:
+  pgdata:
+  catalog_pgdata:
   redis_data:
