@@ -7,6 +7,53 @@ from tests.factories import ProductoFactory, InventarioFactory, generate_test_pr
 
 fake = Faker(['es_ES'])
 
+def setup_mock_session_execute(mock_session, count_value, data_list, inventory_list=None):
+    """
+    Función auxiliar para configurar correctamente el mock de session.execute 
+    para manejar múltiples llamadas SQLAlchemy async.
+    """
+    if inventory_list is None:
+        inventory_list = []
+    
+    # Mock para el count query
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = count_value
+    
+    # Mock para el data query
+    data_result = MagicMock()
+    data_scalars = MagicMock()
+    data_scalars.all.return_value = data_list
+    data_result.scalars.return_value = data_scalars
+    
+    # Mock para el inventory query
+    inv_result = MagicMock()
+    inv_result.all.return_value = inventory_list
+    
+    # Configurar side_effect para múltiples llamadas en orden
+    mock_session.execute.side_effect = [count_result, data_result, inv_result]
+    
+    return mock_session
+
+def setup_mock_session_simple(mock_session, count_value, data_list):
+    """
+    Función auxiliar para configurar mock de session.execute para funciones
+    que solo hacen count + data queries (como detalle_inventario).
+    """
+    # Mock para el count query
+    count_result = MagicMock()
+    count_result.scalar_one.return_value = count_value
+    
+    # Mock para el data query
+    data_result = MagicMock()
+    data_scalars = MagicMock()
+    data_scalars.all.return_value = data_list
+    data_result.scalars.return_value = data_scalars
+    
+    # Configurar side_effect para 2 llamadas
+    mock_session.execute.side_effect = [count_result, data_result]
+    
+    return mock_session
+
 class TestBuscarProductos:
     """Pruebas para la función buscar_productos."""
 
@@ -15,8 +62,7 @@ class TestBuscarProductos:
         """Prueba búsqueda sin filtros aplicados."""
         # Arrange
         productos_mock = generate_test_productos(5)
-        mock_session.execute.return_value.scalar_one.return_value = 5
-        mock_session.execute.return_value.scalars.return_value.all.return_value = productos_mock
+        setup_mock_session_execute(mock_session, 5, productos_mock)
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -36,8 +82,7 @@ class TestBuscarProductos:
         """Prueba búsqueda por nombre."""
         # Arrange
         productos_mock = [ProductoFactory(nombre="Amoxicilina 500mg")]
-        mock_session.execute.return_value.scalar_one.return_value = 1
-        mock_session.execute.return_value.scalars.return_value.all.return_value = productos_mock
+        setup_mock_session_execute(mock_session, 1, productos_mock)
         mock_session.execute.return_value.all.return_value = []  # Sin inventario
         
         # Act
@@ -60,9 +105,7 @@ class TestBuscarProductos:
             ProductoFactory(categoria_id="ANTIBIOTICS"),
             ProductoFactory(categoria_id="ANTIBIOTICS")
         ]
-        mock_session.execute.return_value.scalar_one.return_value = 2
-        mock_session.execute.return_value.scalars.return_value.all.return_value = productos_mock
-        mock_session.execute.return_value.all.return_value = []
+        setup_mock_session_execute(mock_session, 2, productos_mock)
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -80,9 +123,7 @@ class TestBuscarProductos:
         """Prueba búsqueda por código específico."""
         # Arrange
         producto_mock = ProductoFactory(codigo="AMX500")
-        mock_session.execute.return_value.scalar_one.return_value = 1
-        mock_session.execute.return_value.scalars.return_value.all.return_value = [producto_mock]
-        mock_session.execute.return_value.all.return_value = []
+        setup_mock_session_execute(mock_session, 1, [producto_mock])
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -100,9 +141,7 @@ class TestBuscarProductos:
         """Prueba paginación correcta."""
         # Arrange - Página 2 con size 5
         productos_mock = generate_test_productos(5)
-        mock_session.execute.return_value.scalar_one.return_value = 25  # Total
-        mock_session.execute.return_value.scalars.return_value.all.return_value = productos_mock
-        mock_session.execute.return_value.all.return_value = []
+        setup_mock_session_execute(mock_session, 25, productos_mock)
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -121,9 +160,7 @@ class TestBuscarProductos:
         """Prueba ordenamiento por precio."""
         # Arrange
         productos_mock = generate_test_productos(3)
-        mock_session.execute.return_value.scalar_one.return_value = 3
-        mock_session.execute.return_value.scalars.return_value.all.return_value = productos_mock
-        mock_session.execute.return_value.all.return_value = []
+        setup_mock_session_execute(mock_session, 3, productos_mock)
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -146,12 +183,7 @@ class TestBuscarProductos:
         inventario_mock_row.cantidad = 1500
         inventario_mock_row.paises = ["CO", "MX"]
         
-        # Configurar mocks para múltiples llamadas
-        mock_session.execute.side_effect = [
-            MagicMock(scalar_one=lambda: 1),  # Count query
-            MagicMock(scalars=lambda: MagicMock(all=lambda: productos_mock)),  # Products query  
-            MagicMock(all=lambda: [inventario_mock_row])  # Inventory query
-        ]
+        setup_mock_session_execute(mock_session, 1, productos_mock, [inventario_mock_row])
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -170,8 +202,7 @@ class TestBuscarProductos:
     async def test_buscar_productos_sin_resultados(self, mock_session):
         """Prueba cuando no hay productos que coincidan."""
         # Arrange
-        mock_session.execute.return_value.scalar_one.return_value = 0
-        mock_session.execute.return_value.scalars.return_value.all.return_value = []
+        setup_mock_session_execute(mock_session, 0, [])
         
         # Act
         productos, total, inv_map = await buscar_productos(
@@ -193,8 +224,7 @@ class TestDetalleInventario:
         """Prueba detalle de inventario exitoso."""
         # Arrange
         inventarios_mock = generate_test_inventario(["PROD001"], 3)
-        mock_session.execute.return_value.scalar_one.return_value = 3
-        mock_session.execute.return_value.scalars.return_value.all.return_value = inventarios_mock
+        setup_mock_session_simple(mock_session, 3, inventarios_mock)
         
         # Act
         inventarios, total = await detalle_inventario(mock_session, "PROD001", 1, 10)
@@ -209,8 +239,7 @@ class TestDetalleInventario:
         """Prueba paginación en detalle de inventario."""
         # Arrange
         inventarios_mock = generate_test_inventario(["PROD001"], 5)
-        mock_session.execute.return_value.scalar_one.return_value = 15  # Total
-        mock_session.execute.return_value.scalars.return_value.all.return_value = inventarios_mock
+        setup_mock_session_simple(mock_session, 15, inventarios_mock)
         
         # Act - Página 2, tamaño 5
         inventarios, total = await detalle_inventario(mock_session, "PROD001", 2, 5)
@@ -223,8 +252,7 @@ class TestDetalleInventario:
     async def test_detalle_inventario_producto_sin_stock(self, mock_session):
         """Prueba producto sin inventario."""
         # Arrange
-        mock_session.execute.return_value.scalar_one.return_value = 0
-        mock_session.execute.return_value.scalars.return_value.all.return_value = []
+        setup_mock_session_simple(mock_session, 0, [])
         
         # Act
         inventarios, total = await detalle_inventario(mock_session, "PROD_SIN_STOCK", 1, 10)

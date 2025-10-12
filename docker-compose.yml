@@ -105,6 +105,38 @@ services:
         source: ./catalogo-service
         target: /app
     
+
+
+
+  # === Servicio principal de Cliente (FastAPI) ===
+  cliente-service:
+    build:
+      context: ./cliente-service
+      dockerfile: Dockerfile
+    container_name: cliente-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cliente_user:cliente_pass@cliente-db:5432/cliente_db
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/2  # Base de datos Redis diferente
+      SLA_MAX_RESPONSE_MS: 2000
+      LOG_LEVEL: INFO
+      DEBUG: false
+      ORDERS_SERVICE_URL: http://orders-service:3000
+      CATALOGO_SERVICE_URL: http://catalog-service:3001
+      ALLOWED_ORIGINS: "*"
+      ALLOWED_METHODS: "*"
+      ALLOWED_HEADERS: "*"
+    working_dir: /app
+    depends_on:
+      cliente-db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      db-init-cliente: { condition: service_completed_successfully }
+    ports: ["3003:8000"]  # Puerto diferente a los otros servicios
+    profiles: ["${APP_PROFILE:-dev}"]
+    volumes:
+      - type: bind
+        source: ./cliente-service
+        target: /app
+
   # === Servicio de rutas (FastAPI) ===
   backend:
     build:
@@ -115,11 +147,49 @@ services:
     depends_on:
       - db
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./ruta-service:/app
+
+  # === Cliente Service Database ===
+  cliente-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cliente_db
+      POSTGRES_USER: cliente_user
+      POSTGRES_PASSWORD: cliente_pass
+    ports:
+      - "5435:5432"
+    volumes:
+      - cliente_pgdata:/var/lib/postgresql/data
+      - ./cliente-service/data/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cliente_user -d cliente_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # === Inicialización de la base de datos "cliente" ===
+  db-init-cliente:
+    image: python:3.11-slim
+    depends_on:
+      cliente-db:
+        condition: service_healthy
+    environment:
+      PGHOST: cliente-db
+      POSTGRES_USER: cliente_user
+      POSTGRES_PASSWORD: cliente_pass
+      TARGET_DB: cliente_db
+    volumes:
+      - ./cliente-service/app/create_cliente_db.py:/app/create_cliente_db.py:ro
+    working_dir: /app
+    command: >
+      bash -lc "pip install -q 'psycopg[binary]>=3.1,<4' && python create_cliente_db.py"
+    restart: "no"
         
 volumes:
   pgdata:
   catalog_pgdata:
+  cliente_pgdata:
   redis_data:

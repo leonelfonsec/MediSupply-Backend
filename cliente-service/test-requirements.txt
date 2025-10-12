@@ -1,0 +1,17 @@
+# Dependencias para testing - Cliente Service HU07
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+httpx==0.25.2
+coverage==7.3.2
+
+# Para mocking avanzado
+pytest-mock==3.12.0
+
+# Para testing de base de datos
+aiosqlite==0.21.0
+greenlet==3.2.4
+
+# Para reportes y análisis
+pytest-html==4.1.1
+pytest-xdist==3.3.1
