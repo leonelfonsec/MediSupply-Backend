@@ -30,7 +30,8 @@ COPY --chown=appuser:appuser . .
 FROM base AS dev
 ENV ENVIRONMENT=development \
     LOG_LEVEL=debug \
-    PORT=3000
+    PORT=3000 \
+    RUN_DDL_ON_STARTUP=true
 EXPOSE 3000
 USER appuser
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000", "--reload", "--log-level", "debug"]
@@ -40,8 +41,9 @@ FROM base AS prod
 RUN pip install --no-cache-dir gunicorn
 ENV ENVIRONMENT=production \
     LOG_LEVEL=info \
-    WORKERS=2 \
-    PORT=3000
+    WORKERS=1 \
+    PORT=3000 \
+    RUN_DDL_ON_STARTUP=false
 EXPOSE 3000
 USER appuser
-CMD ["bash", "-lc", "gunicorn -k uvicorn.workers.UvicornWorker -w ${WORKERS:-2} -b 0.0.0.0:${PORT} app.main:app --access-logfile - --error-logfile -"]
+CMD ["bash", "-lc", "gunicorn -k uvicorn.workers.UvicornWorker -w ${WORKERS:-1} -b 0.0.0.0:${PORT} app.main:app --access-logfile - --error-logfile -"]

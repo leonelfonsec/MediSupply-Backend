@@ -1,12 +1,15 @@
 ﻿from fastapi import FastAPI, Header, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from app.db import get_session, Base, engine 
+from sqlalchemy import text
+from app.db import get_session, Base, engine
 from app.models import IdempotencyRequest, IdemStatus, Order, OutboxEvent
 from app.schemas import CreateOrderRequest, AcceptedResponse
 from app.tasks import celery
 from uuid import uuid4
+import logging
 
+log = logging.getLogger("orders")
 app = FastAPI(title="Orders Service")
 
 def _sha256(s: str) -> str:
@@ -16,23 +19,27 @@ def _sha256(s: str) -> str:
 def get_idempotency_key(
     idem: str | None = Header(
         default=None,
-        alias="Idempotency-Key",      
+        alias="Idempotency-Key",
         convert_underscores=False,
         description="UUID v4 para idempotencia (si lo dejas vacío, el server genera uno)",
-        example="550e8400-e29b-41d4-a716-446655440000",
     )
 ) -> str:
     return idem or str(uuid4())
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+    except Exception as e:
+        return {"status": "degraded", "db_error": str(e)}
 
 @app.post("/orders", response_model=AcceptedResponse, status_code=202)
 async def create_order(
     body: CreateOrderRequest,
     Idempotency_Key: str = Depends(get_idempotency_key),
-    session: AsyncSession = Depends(get_session),   
+    session: AsyncSession = Depends(get_session),
 ):
     key_hash = _sha256(Idempotency_Key)
     body_hash = _sha256(body.model_dump_json())
@@ -46,7 +53,6 @@ async def create_order(
                 if idem.status == IdemStatus.DONE and idem.response_body:
                     return AcceptedResponse(request_id=key_hash, message="Ya procesado (idempotente)")
             else:
-                # Esto puede fallar si otra instancia ya creó el registro
                 idem = IdempotencyRequest(key_hash=key_hash, body_hash=body_hash, status=IdemStatus.PENDING)
                 session.add(idem)
 
@@ -62,17 +68,20 @@ async def create_order(
             session.add(evt)
 
     except IntegrityError:
-        # Otra instancia ya procesó esta request
-        # Buscar el resultado existente
         await session.rollback()
         idem = await session.get(IdempotencyRequest, key_hash)
         return AcceptedResponse(request_id=key_hash, message="Ya procesado por otra instancia")
 
-    # fuera de la transacción
-    celery.send_task("process_outbox_event", args=[str(evt.event_id)])
+    # Notificación asíncrona (no romper si no hay broker en prod)
+    try:
+        celery.send_task("process_outbox_event", args=[str(evt.event_id)])
+    except Exception as e:
+        log.warning("No se pudo publicar en Celery (continuando): %s", e)
+
     return AcceptedResponse(request_id=key_hash)
 
 @app.on_event("startup")
 async def on_startup():
+    # Útil en local; en prod idealmente usar migraciones
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
