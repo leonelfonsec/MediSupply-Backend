@@ -53,6 +53,7 @@ jobs:
       - name: Run tests for ${{ matrix.service }}
         run: |
           cd "${{ matrix.service }}"
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
           pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch
           python -m coverage xml -i -o coverage.xml
 
