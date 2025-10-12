@@ -1,0 +1,46 @@
+# FastAPI y dependencias core
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Base de datos
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+alembic==1.12.1
+
+# Redis para caché
+redis==5.0.1
+hiredis==2.2.3
+
+# HTTP requests para comunicación entre servicios
+httpx==0.25.2
+aiohttp==3.9.1
+
+# Utilidades
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+email-validator==2.1.0
+
+# Logging y monitoreo
+structlog==23.2.0
+python-json-logger==2.0.7
+
+# Testing (desarrollo)
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+faker==20.1.0
+factory-boy==3.3.0
+httpx==0.25.2
+
+# Variables de entorno
+python-dotenv==1.0.0
+
+# Validaciones adicionales
+phonenumbers==8.13.26
+python-dateutil==2.8.2
+
+# Métricas y health checks
+prometheus-client==0.19.0
