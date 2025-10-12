@@ -67,19 +67,10 @@ async def listar_clientes(
         # Medir performance
         took_ms = int((time.perf_counter_ns() - started) / 1_000_000)
         
-        # Headers informativos siguiendo patrón catalogo
-        headers = {
-            "X-Response-Time-Ms": str(took_ms),
-            "X-Total-Items": str(len(clientes)),
-            "X-Limit": str(limite),
-            "X-Offset": str(offset),
-            "X-SLA-Compliant": str(took_ms <= settings.sla_max_response_ms)
-        }
+        print(f"🔍 DEBUG: Listando {len(clientes)} clientes en {took_ms}ms")
         
-        return JSONResponse(
-            content=[cliente.dict() for cliente in clientes],
-            headers=headers
-        )
+        # Usar return directo - FastAPI maneja la serialización automáticamente
+        return clientes
         
     except Exception as e:
         raise HTTPException(
@@ -228,18 +219,10 @@ async def obtener_historico_cliente(
         
         # Medir performance
         took_ms = int((time.perf_counter_ns() - started) / 1_000_000)
+        print(f"🔍 DEBUG: Histórico completo obtenido en {took_ms}ms")
         
-        # Headers informativos
-        headers = {
-            "X-Response-Time-Ms": str(took_ms),
-            "X-SLA-Compliant": str(took_ms <= settings.sla_max_response_ms),
-            "X-Service": "cliente-service"
-        }
-        
-        return JSONResponse(
-            content=historico.dict(),
-            headers=headers
-        )
+        # Usar return directo - FastAPI maneja la serialización automáticamente
+        return historico
         
     except HTTPException:
         raise
@@ -289,13 +272,8 @@ async def get_metrics(
         service = ClienteService(session, settings)
         metrics = await service.obtener_metricas()
         
-        return JSONResponse(
-            content=metrics,
-            headers={
-                "X-Service": "cliente-service",
-                "X-Generated-At": time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            }
-        )
+        print(f"🔍 DEBUG: Métricas obtenidas: {metrics}")
+        return metrics
         
     except Exception as e:
         return JSONResponse(

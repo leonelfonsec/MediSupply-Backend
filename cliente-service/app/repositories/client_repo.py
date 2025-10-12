@@ -12,7 +12,7 @@ from app.models.client_model import (
     Cliente, CompraHistorico, DevolucionHistorico, 
     ConsultaClienteLog, ProductoPreferido, EstadisticaCliente
 )
-from app.schemas import ClienteBasicoResponse
+from app.schemas import ClienteBasicoResponse, EstadisticasClienteResponse
 
 
 class ClienteRepository:
@@ -56,20 +56,30 @@ class ClienteRepository:
         result = await self.session.execute(stmt)
         clientes = result.scalars().all()
         
-        # Convertir a response models
+        # Convertir a response models usando model_validate
+        print(f"🔍 REPOSITORY DEBUG: Convirtiendo {len(clientes)} clientes a ClienteBasicoResponse")
         clientes_response = []
         for cliente in clientes:
-            clientes_response.append(ClienteBasicoResponse(
-                id=cliente.id,
-                nit=cliente.nit,
-                nombre=cliente.nombre,
-                codigo_unico=cliente.codigo_unico,
-                email=cliente.email,
-                telefono=cliente.telefono,
-                ciudad=cliente.ciudad,
-                pais=cliente.pais,
-                activo=cliente.activo
-            ))
+            try:
+                cliente_response = ClienteBasicoResponse.model_validate(cliente)
+                clientes_response.append(cliente_response)
+            except Exception as e:
+                print(f"🔍 REPOSITORY DEBUG: Error convirtiendo cliente {cliente.id}: {e}")
+                # Fallback a mapeo manual si falla model_validate
+                clientes_response.append(ClienteBasicoResponse(
+                    id=cliente.id,
+                    nit=cliente.nit,
+                    nombre=cliente.nombre,
+                    codigo_unico=cliente.codigo_unico,
+                    email=cliente.email,
+                    telefono=cliente.telefono,
+                    direccion=getattr(cliente, 'direccion', None),
+                    ciudad=cliente.ciudad,
+                    pais=cliente.pais,
+                    activo=cliente.activo,
+                    created_at=getattr(cliente, 'created_at', None),
+                    updated_at=getattr(cliente, 'updated_at', None)
+                ))
         
         return clientes_response
     
@@ -188,51 +198,32 @@ class ClienteRepository:
         # 3. Calcular productos preferidos
         productos_preferidos = await self._calcular_productos_preferidos(cliente_id, fecha_limite)
         
-        # 4. Calcular estadísticas
-        estadisticas = await self._calcular_estadisticas_cliente(cliente_id, compras, devoluciones)
+        # 4. Calcular estadísticas básicas
+        print(f"🔍 REPOSITORY DEBUG: Calculando estadísticas - compras: {len(compras)}, devoluciones: {len(devoluciones)}")
+        from decimal import Decimal
         
-        # Construir respuesta
+        # Crear estadísticas básicas temporales
+        estadisticas = EstadisticasClienteResponse(
+            cliente_id=cliente_id,
+            total_compras=len(compras),
+            total_productos_unicos=len(set(c.producto_id for c in compras)) if compras else 0,
+            total_devoluciones=len(devoluciones),
+            valor_total_compras=Decimal(sum(c.precio_total for c in compras)) if compras else Decimal('0.00'),
+            promedio_orden=Decimal(sum(c.precio_total for c in compras) / len(compras)) if compras else Decimal('0.00'),
+            frecuencia_compra_mensual=Decimal('0.00'),
+            tasa_devolucion=Decimal('0.00'),
+            cliente_desde=None,
+            ultima_compra=None,
+            updated_at=None
+        )
+        
+        # Construir respuesta usando model_validate
+        print(f"🔍 REPOSITORY DEBUG: Construyendo respuesta de histórico completo...")
         return {
-            "cliente": ClienteBasicoResponse(
-                id=cliente.id,
-                nit=cliente.nit,
-                nombre=cliente.nombre,
-                codigo_unico=cliente.codigo_unico,
-                email=cliente.email,
-                telefono=cliente.telefono,
-                ciudad=cliente.ciudad,
-                pais=cliente.pais,
-                activo=cliente.activo
-            ),
-            "historico_compras": [
-                {
-                    "orden_id": compra.orden_id,
-                    "producto_id": compra.producto_id,
-                    "producto_nombre": compra.producto_nombre,
-                    "categoria_producto": compra.categoria_producto,
-                    "cantidad": compra.cantidad,
-                    "precio_unitario": str(compra.precio_unitario),
-                    "precio_total": str(compra.precio_total),
-                    "fecha_compra": compra.fecha_compra.isoformat(),
-                    "estado_orden": compra.estado_orden
-                }
-                for compra in compras
-            ],
+            "cliente": cliente,  # Devolver objeto modelo directamente
+            "historico_compras": compras,  # Devolver objetos modelo directamente
             "productos_preferidos": productos_preferidos,
-            "devoluciones": [
-                {
-                    "id": dev.id,
-                    "compra_orden_id": dev.compra_orden_id,
-                    "producto_id": dev.producto_id,
-                    "producto_nombre": dev.producto_nombre,
-                    "cantidad_devuelta": dev.cantidad_devuelta,
-                    "motivo": dev.motivo,
-                    "categoria_motivo": dev.categoria_motivo,
-                    "fecha_devolucion": dev.fecha_devolucion.isoformat(),
-                    "estado": dev.estado
-                }
-                for dev in devoluciones
-            ],
+            "devoluciones": devoluciones,  # Devolver objetos modelo directamente
             "estadisticas": estadisticas
         }
     

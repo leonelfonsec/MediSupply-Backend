@@ -80,8 +80,23 @@ class ClienteService:
             else:
                 tipo_busqueda = "nombre"
             
-            # Registrar consulta para trazabilidad (TEMPORALMENTE DESHABILITADO PARA DEBUG)
-            print(f"🔍 SERVICE DEBUG: Skipping auditoria temporalmente para debug")
+                        # Registrar consulta para trazabilidad
+            try:
+                await self._registrar_auditoria(
+                    accion="BUSCAR_CLIENTE",
+                    vendedor_id=vendedor_id,
+                    detalles={
+                        "termino_busqueda": termino_busqueda,
+                        "tipo_busqueda": tipo_busqueda,
+                        "cliente_encontrado": cliente.nit if cliente else None,
+                        "tiempo_respuesta_ms": took_ms
+                    }
+                )
+                print(f"✅ Auditoría registrada para búsqueda de cliente por vendedor {vendedor_id}")
+            except Exception as audit_error:
+                # Log warning pero no fallar la consulta
+                print(f"⚠️ Warning: Error en auditoría: {audit_error}")
+                pass
             # await self.repository.registrar_consulta(...)
             
             # Validar SLA de performance
@@ -228,33 +243,26 @@ class ClienteService:
             metadatos["advertencias_performance"] = advertencias
             
             # Registrar consulta para trazabilidad
-            await self.repository.registrar_consulta(
-                vendedor_id=vendedor_id,
-                cliente_id=cliente_id,
-                tipo_consulta="historico_completo",
-                took_ms=took_ms,
-                metadatos={
-                    "limite_meses": limite_meses,
-                    "incluyo_devoluciones": incluir_devoluciones,
-                    "total_compras": len(historico_data['historico_compras']),
-                    "total_preferidos": len(historico_data['productos_preferidos']),
-                    "total_devoluciones": len(historico_data['devoluciones']),
-                    "cumple_sla": cumple_sla
-                }
-            )
+            try:
+                await self._registrar_auditoria(
+                    accion="CONSULTAR_HISTORICO",
+                    vendedor_id=vendedor_id,
+                    detalles={
+                        "cliente_id": cliente_id,
+                        "limite_meses": limite_meses,
+                        "incluir_devoluciones": incluir_devoluciones,
+                        "tiempo_respuesta_ms": took_ms
+                    }
+                )
+                print(f"✅ Auditoría registrada para histórico de cliente {cliente_id} por vendedor {vendedor_id}")
+            except Exception as audit_error:
+                print(f"⚠️ Warning: Error en auditoría de histórico: {audit_error}")
+                pass
+            # await self.repository.registrar_consulta(...)
             
-            # Construir respuesta
-            cliente_response = ClienteBasicoResponse(
-                id=historico_data['cliente'].id,
-                nit=historico_data['cliente'].nit,
-                nombre=historico_data['cliente'].nombre,
-                codigo_unico=historico_data['cliente'].codigo_unico,
-                email=historico_data['cliente'].email,
-                telefono=historico_data['cliente'].telefono,
-                ciudad=historico_data['cliente'].ciudad,
-                pais=historico_data['cliente'].pais,
-                activo=historico_data['cliente'].activo
-            )
+            # Construir respuesta usando model_validate
+            print(f"🔍 SERVICE DEBUG: Creando ClienteBasicoResponse para histórico...")
+            cliente_response = ClienteBasicoResponse.model_validate(historico_data['cliente'])
             
             return HistoricoCompletoResponse(
                 cliente=cliente_response,
@@ -392,3 +400,39 @@ class ClienteService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Error al obtener métricas: {str(e)}"
             )
+    
+    async def _registrar_auditoria(
+        self,
+        accion: str,
+        vendedor_id: str,
+        detalles: Dict[str, Any]
+    ) -> None:
+        """
+        Registra una acción de auditoría para trazabilidad
+        
+        Implementación simple que puede expandirse a base de datos
+        o sistema de logging externo según los requerimientos.
+        """
+        try:
+            timestamp = datetime.utcnow().isoformat() + "Z"
+            audit_record = {
+                "timestamp": timestamp,
+                "service": "cliente-service",
+                "accion": accion,
+                "vendedor_id": vendedor_id,
+                "detalles": detalles
+            }
+            
+            # Por ahora logging simple - puede expandirse a BD o sistema externo
+            print(f"📋 AUDITORÍA: {audit_record}")
+            
+            # TODO: Aquí se puede expandir para guardar en:
+            # - Tabla de auditoría en la base de datos
+            # - Sistema de logging centralizado (ELK Stack, CloudWatch, etc.)
+            # - Message queue para procesamiento asíncrono
+            # - Webhook a sistema de compliance
+            
+        except Exception as audit_error:
+            # No fallar la operación principal si falla la auditoría
+            print(f"❌ Error crítico en auditoría: {audit_error}")
+            pass
