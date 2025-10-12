@@ -55,8 +55,8 @@ jobs:
           cd "${{ matrix.service }}"
           export PYTHONPATH="${PYTHONPATH}:$(pwd)"
           if [ "${{ matrix.service }}" = "catalogo-service" ]; then
-            # Temporalmente excluir tests problemáticos
-            pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch --ignore=tests/test_cache.py --ignore=tests/test_models.py
+            # Temporalmente excluir test_cache.py - test_repositories.py ya está corregido
+            pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch --ignore=tests/test_cache.py
           else
             pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch
           fi
