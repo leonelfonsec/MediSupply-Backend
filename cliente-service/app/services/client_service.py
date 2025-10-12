@@ -434,5 +434,8 @@ class ClienteService:
             
         except Exception as audit_error:
             # No fallar la operación principal si falla la auditoría
-            print(f"❌ Error crítico en auditoría: {audit_error}")
-            pass
+            try:
+                print(f"❌ Error crítico en auditoría: {audit_error}")
+            except:
+                # Si ni siquiera print funciona, silencioso
+                pass

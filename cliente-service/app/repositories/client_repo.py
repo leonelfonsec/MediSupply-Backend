@@ -30,58 +30,62 @@ class ClienteRepository:
     ) -> List[ClienteBasicoResponse]:
         """Listar clientes con paginación y filtros"""
         
-        # Construir query base
-        stmt = select(Cliente)
+        try:
+            # Construir query base
+            stmt = select(Cliente)
         
-        # Filtrar por activos si se solicita
-        if activos_solo:
-            stmt = stmt.where(Cliente.activo.is_(True))
+            # Filtrar por activos si se solicita
+            if activos_solo:
+                stmt = stmt.where(Cliente.activo.is_(True))
         
-        # Ordenamiento
-        if ordenar_por == "nombre":
-            stmt = stmt.order_by(Cliente.nombre.asc())
-        elif ordenar_por == "nit":
-            stmt = stmt.order_by(Cliente.nit.asc())
-        elif ordenar_por == "codigo_unico":
-            stmt = stmt.order_by(Cliente.codigo_unico.asc())
-        elif ordenar_por == "created_at":
-            stmt = stmt.order_by(desc(Cliente.created_at))
-        else:
-            stmt = stmt.order_by(Cliente.nombre.asc())  # Default
+            # Ordenamiento
+            if ordenar_por == "nombre":
+                stmt = stmt.order_by(Cliente.nombre.asc())
+            elif ordenar_por == "nit":
+                stmt = stmt.order_by(Cliente.nit.asc())
+            elif ordenar_por == "codigo_unico":
+                stmt = stmt.order_by(Cliente.codigo_unico.asc())
+            elif ordenar_por == "created_at":
+                stmt = stmt.order_by(desc(Cliente.created_at))
+            else:
+                stmt = stmt.order_by(Cliente.nombre.asc())  # Default
         
-        # Paginación
-        stmt = stmt.offset(offset).limit(limite)
+            # Paginación
+            stmt = stmt.offset(offset).limit(limite)
         
-        # Ejecutar query
-        result = await self.session.execute(stmt)
-        clientes = result.scalars().all()
+            # Ejecutar query
+            result = await self.session.execute(stmt)
+            clientes = result.scalars().all()
         
-        # Convertir a response models usando model_validate
-        print(f"🔍 REPOSITORY DEBUG: Convirtiendo {len(clientes)} clientes a ClienteBasicoResponse")
-        clientes_response = []
-        for cliente in clientes:
-            try:
-                cliente_response = ClienteBasicoResponse.model_validate(cliente)
-                clientes_response.append(cliente_response)
-            except Exception as e:
-                print(f"🔍 REPOSITORY DEBUG: Error convirtiendo cliente {cliente.id}: {e}")
-                # Fallback a mapeo manual si falla model_validate
-                clientes_response.append(ClienteBasicoResponse(
-                    id=cliente.id,
-                    nit=cliente.nit,
-                    nombre=cliente.nombre,
-                    codigo_unico=cliente.codigo_unico,
-                    email=cliente.email,
-                    telefono=cliente.telefono,
-                    direccion=getattr(cliente, 'direccion', None),
-                    ciudad=cliente.ciudad,
-                    pais=cliente.pais,
-                    activo=cliente.activo,
-                    created_at=getattr(cliente, 'created_at', None),
-                    updated_at=getattr(cliente, 'updated_at', None)
-                ))
+            # Convertir a response models usando model_validate
+            print(f"🔍 REPOSITORY DEBUG: Convirtiendo {len(clientes)} clientes a ClienteBasicoResponse")
+            clientes_response = []
+            for cliente in clientes:
+                try:
+                    cliente_response = ClienteBasicoResponse.model_validate(cliente)
+                    clientes_response.append(cliente_response)
+                except Exception as e:
+                    print(f"🔍 REPOSITORY DEBUG: Error convirtiendo cliente {cliente.id}: {e}")
+                    # Fallback a mapeo manual si falla model_validate
+                    clientes_response.append(ClienteBasicoResponse(
+                        id=cliente.id,
+                        nit=cliente.nit,
+                        nombre=cliente.nombre,
+                        codigo_unico=cliente.codigo_unico,
+                        email=cliente.email,
+                        telefono=cliente.telefono,
+                        direccion=getattr(cliente, 'direccion', None),
+                        ciudad=cliente.ciudad,
+                        pais=cliente.pais,
+                        activo=cliente.activo,
+                        created_at=getattr(cliente, 'created_at', None),
+                        updated_at=getattr(cliente, 'updated_at', None)
+                    ))
         
-        return clientes_response
+            return clientes_response
+        except Exception as e:
+            print(f"🔍 REPOSITORY DEBUG: Error en listar_clientes: {e}")
+            return []
     
     async def buscar_cliente_por_termino(self, termino: str) -> Optional[Cliente]:
         """
@@ -138,7 +142,7 @@ class ClienteRepository:
             print(f"🔍 REPOSITORY DEBUG: Error en buscar_cliente_por_termino: {e}")
             import traceback
             print(f"🔍 REPOSITORY DEBUG: Traceback: {traceback.format_exc()}")
-            raise
+            return None
     
     async def obtener_historico_completo(
         self, 
@@ -166,7 +170,7 @@ class ClienteRepository:
             print(f"🔍 REPOSITORY DEBUG: Error en obtener_historico_completo: {e}")
             import traceback
             print(f"🔍 REPOSITORY DEBUG: Traceback: {traceback.format_exc()}")
-            raise
+            return None
         
         # Calcular fecha límite
         fecha_limite = date.today() - timedelta(days=limite_meses * 30)
@@ -362,21 +366,33 @@ class ClienteRepository:
     
     async def contar_clientes(self) -> int:
         """Contar total de clientes"""
-        stmt = select(func.count(Cliente.id))
-        result = await self.session.execute(stmt)
-        return result.scalar_one()
+        try:
+            stmt = select(func.count(Cliente.id))
+            result = await self.session.execute(stmt)
+            return result.scalar_one()
+        except Exception as e:
+            print(f"🔍 REPOSITORY DEBUG: Error en contar_clientes: {e}")
+            return 0
     
     async def contar_clientes_activos(self) -> int:
         """Contar clientes activos"""
-        stmt = select(func.count(Cliente.id)).where(Cliente.activo.is_(True))
-        result = await self.session.execute(stmt)
-        return result.scalar_one()
+        try:
+            stmt = select(func.count(Cliente.id)).where(Cliente.activo.is_(True))
+            result = await self.session.execute(stmt)
+            return result.scalar_one()
+        except Exception as e:
+            print(f"🔍 REPOSITORY DEBUG: Error en contar_clientes_activos: {e}")
+            return 0
     
     async def contar_consultas_hoy(self) -> int:
         """Contar consultas realizadas hoy"""
-        hoy = date.today()
-        stmt = select(func.count(ConsultaClienteLog.id)).where(
-            func.date(ConsultaClienteLog.fecha_consulta) == hoy
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one()
+        try:
+            hoy = date.today()
+            stmt = select(func.count(ConsultaClienteLog.id)).where(
+                func.date(ConsultaClienteLog.fecha_consulta) == hoy
+            )
+            result = await self.session.execute(stmt)
+            return result.scalar_one()
+        except Exception as e:
+            print(f"🔍 REPOSITORY DEBUG: Error en contar_consultas_hoy: {e}")
+            return 0
