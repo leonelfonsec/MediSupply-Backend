@@ -372,7 +372,9 @@ resource "aws_ecs_task_definition" "orders" {
       ],
       environment = [
         { name = "ENV", value = var.env },
-        { name = "PORT", value = tostring(var.app_port) }
+        { name = "PORT", value = tostring(var.app_port) },
+        { name = "RUN_DDL_ON_STARTUP", value = "false" },  
+        { name = "WEB_CONCURRENCY", value = "2" }          
       ],
       secrets = [
         { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.db_url.arn }
@@ -392,6 +394,7 @@ resource "aws_ecs_task_definition" "orders" {
         retries     = 3,
         startPeriod = 60
       }
+
     }
   ])
 
