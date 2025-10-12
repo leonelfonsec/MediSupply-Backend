@@ -18,12 +18,14 @@ permissions:
 
 env:
   PYTHON_VERSION: '3.11'
-  SERVICE_DIR: 'orders-service'
 
 jobs:
   tests:
     name: Ejecutar unit tests
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [orders-service, catalogo-service]
     steps:
       - uses: actions/checkout@v4
 
@@ -34,65 +36,70 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles(format('{0}/requirements*.txt', env.SERVICE_DIR)) }}
+          key: ${{ runner.os }}-pip-${{ matrix.service }}-${{ hashFiles(format('{0}/requirements*.txt', matrix.service)) }}
           restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.service }}-
             ${{ runner.os }}-pip-
 
-      - name: Install deps
+      - name: Install deps for ${{ matrix.service }}
         run: |
-          cd "$SERVICE_DIR"
+          cd "${{ matrix.service }}"
           python -m pip install --upgrade pip
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          if [ -f test-requirements.txt ]; then pip install -r test-requirements.txt; fi
           pip install -r requirements.txt
           pip install pytest pytest-cov coverage
 
-      - name: Run tests (pytest + coverage.xml)
+      - name: Run tests for ${{ matrix.service }}
         run: |
-          cd "$SERVICE_DIR"
+          cd "${{ matrix.service }}"
           pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch
           python -m coverage xml -i -o coverage.xml
 
-      - name: Upload coverage.xml
+      - name: Upload coverage.xml for ${{ matrix.service }}
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-xml
-          path: ${{ env.SERVICE_DIR }}/coverage.xml
+          name: coverage-xml-${{ matrix.service }}
+          path: ${{ matrix.service }}/coverage.xml
           if-no-files-found: error
 
-      - name: Build & Upload HTML coverage
+      - name: Build & Upload HTML coverage for ${{ matrix.service }}
         run: |
-          cd "$SERVICE_DIR"
+          cd "${{ matrix.service }}"
           python -m coverage html -i -d htmlcov
 
       - uses: actions/upload-artifact@v4
         with:
-          name: coverage-html-${{ github.run_id }}
-          path: ${{ env.SERVICE_DIR }}/htmlcov
+          name: coverage-html-${{ matrix.service }}-${{ github.run_id }}
+          path: ${{ matrix.service }}/htmlcov
           retention-days: 7
 
   sonar:
     name: SonarCloud análisis (rama feature)
     needs: [tests]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [orders-service, catalogo-service]
     env:
       SONAR_TOKEN: "${{ secrets.SONAR_TOKEN }}"
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Download coverage.xml
+      - name: Download coverage.xml for ${{ matrix.service }}
         uses: actions/download-artifact@v4
         with:
-          name: coverage-xml
-          path: ${{ env.SERVICE_DIR }}
+          name: coverage-xml-${{ matrix.service }}
+          path: ${{ matrix.service }}
 
-      - name: Ensure coverage file exists
-        run: test -f ${{ env.SERVICE_DIR }}/coverage.xml
+      - name: Ensure coverage file exists for ${{ matrix.service }}
+        run: test -f ${{ matrix.service }}/coverage.xml
 
-      - name: SonarCloud Scan (orders-service)
+      - name: SonarCloud Scan (${{ matrix.service }})
         uses: SonarSource/sonarcloud-github-action@v2
         with:
-          projectBaseDir: ${{ env.SERVICE_DIR }}
+          projectBaseDir: ${{ matrix.service }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
