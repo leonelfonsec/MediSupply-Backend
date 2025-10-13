@@ -1,4 +1,5 @@
 ﻿from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from app.db import get_session, Base, engine 
@@ -8,6 +9,15 @@ from app.tasks import celery
 from uuid import uuid4
 
 app = FastAPI(title="Orders Service")
+
+# Configuración CORS para React Native
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En producción, especifica los dominios exactos
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def _sha256(s: str) -> str:
     import hashlib

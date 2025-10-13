@@ -1,10 +1,20 @@
 from fastapi import FastAPI, Depends, Query
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from database import get_session, init_db
 from models import Visita
 from datetime import date
 
-app = FastAPI()
+app = FastAPI(title="Ruta Service")
+
+# Configuración CORS para React Native
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En producción, especifica los dominios exactos
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 def on_startup():

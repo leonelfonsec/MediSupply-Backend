@@ -1,7 +1,95 @@
 version: "3.9"
 
 services:
+  # === Base de datos PostgreSQL ===
+  db:
+    image: postgres:16-alpine
+    container_name: orders-db-dev
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-orders}
+    ports:
+      - "5433:5432"  # Puerto diferente para desarrollo
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-orders}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # === Redis ===
+  redis:
+    image: redis:7-alpine
+    container_name: orders-redis-dev
+    command: >
+      sh -lc 'redis-server --requirepass "${REDIS_PASSWORD:-redis123}" --appendonly yes'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data_dev:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "${REDIS_PASSWORD:-redis123}" ping | grep PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # === Inicialización de la base de datos "orders" ===
+  db-init-orders:
+    image: python:3.11-slim-bookworm
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      TARGET_DB: orders
+    volumes:
+      - ./orders-service/app/create_orders_db.py:/app/create_orders_db.py:ro
+    working_dir: /app
+    command: >
+      bash -lc "pip install -q 'psycopg[binary]>=3.1,<4' && python create_orders_db.py"
+    restart: "no"
+
+  # === Servicio de Orders (Desarrollo) ===
   orders-service:
+    build:
+      context: ./orders-service
+      target: dev
     command: uvicorn app.main:app --host 0.0.0.0 --port 3000 --reload --log-level debug
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/orders
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+    working_dir: /app
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      db-init-orders: { condition: service_completed_successfully }
+    ports:
+      - "3000:3000"
     volumes:
       - ./orders-service:/app
+
+  # === Servicio de Rutas (Desarrollo) ===
+  ruta-service:
+    build:
+      context: ./ruta-service
+      dockerfile: Dockerfile
+    command: bash -c "python seed.py && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      DATABASE_URL: sqlite:///./rutas.db
+    working_dir: /app
+    ports:
+      - "3002:8000"
+    volumes:
+      - ./ruta-service:/app
+
+volumes:
+  pgdata_dev:
+  redis_data_dev:
