@@ -1,10 +1,14 @@
 terraform {
-  required_version = ">= 1.6.0"
-  required_providers {
-    aws    = { source = "hashicorp/aws", version = "~> 5.0" }
-    random = { source = "hashicorp/random", version = "~> 3.6" }
+  backend "s3" {
+    bucket               = "miso-tfstate-838693051133"   
+    key                  = "infra.tfstate"               
+    region               = "us-east-1"
+    encrypt              = true
+    dynamodb_table       = "miso-tf-locks"               
+    # workspace_key_prefix = "medi-supply"
   }
 }
+
 
 provider "aws" {
   region = var.aws_region
@@ -33,8 +37,7 @@ module "vpc" {
 # ============================================================
 # SECURITY GROUPS
 # ============================================================
-
-# ECS Service SG (servicio interno: solo egress)
+# ECS Service SG (solo egress)
 resource "aws_security_group" "ecs_sg" {
   name        = "orders-ecs-sg"
   description = "Security group for Orders ECS Service"
@@ -52,7 +55,7 @@ resource "aws_security_group" "ecs_sg" {
 
 # RDS PostgreSQL SG:
 #  - permite 5432 desde ECS
-#  - (TEMP) permite 5432 desde cualquier IP (0.0.0.0/0) para pruebas con DBeaver
+#  - (TEMP) 5432 abierto a Internet para pruebas (eliminar luego)
 resource "aws_security_group" "postgres_sg" {
   name        = "orders-postgres-sg"
   description = "Security group for Orders PostgreSQL RDS"
@@ -89,16 +92,14 @@ resource "aws_security_group" "postgres_sg" {
 # ============================================================
 # RDS POSTGRESQL
 # ============================================================
-
-# Password aleatorio fuerte
 resource "random_password" "db_password" {
   length           = 24
   special          = true
   override_special = "-_."
 }
 
-# DB Subnet Groups: privado y público
-resource "aws_db_subnet_group" "postgres" {
+# Subnet groups
+resource "aws_db_subnet_group" "postgres_private" {
   name       = "orders-postgres-subnets"
   subnet_ids = module.vpc.private_subnets
   tags       = { Name = "orders-postgres-subnets", Project = var.project, Env = var.env }
@@ -136,7 +137,7 @@ resource "aws_db_parameter_group" "postgres" {
   }
 }
 
-# IAM Role para Enhanced Monitoring
+# Enhanced Monitoring
 resource "aws_iam_role" "rds_monitoring" {
   name = "orders-rds-monitoring"
   assume_role_policy = jsonencode({
@@ -157,7 +158,7 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
 
 # Instancia RDS PostgreSQL (expuesta temporalmente)
 resource "aws_db_instance" "postgres" {
-  identifier = "orders-postgres" # puedes dejarlo igual
+  identifier = "orders-postgres"
 
   engine         = "postgres"
   engine_version = "15.14"
@@ -173,7 +174,6 @@ resource "aws_db_instance" "postgres" {
   password = random_password.db_password.result
   port     = 5432
 
-  # ← PÚBLICA y en SUBREDES PÚBLICAS
   publicly_accessible  = true
   apply_immediately    = true
   db_subnet_group_name = aws_db_subnet_group.postgres_public.name
@@ -186,7 +186,7 @@ resource "aws_db_instance" "postgres" {
   maintenance_window      = "sun:04:00-sun:05:00"
   copy_tags_to_snapshot   = true
 
-  # TEMPORAL para poder reemplazar rápido sin snapshot final
+  # TEMP para rapidez en pruebas
   skip_final_snapshot      = true
   deletion_protection      = false
   delete_automated_backups = true
@@ -209,7 +209,6 @@ resource "aws_db_instance" "postgres" {
   }
 }
 
-
 # ============================================================
 # SECRETS MANAGER
 # ============================================================
@@ -222,9 +221,9 @@ resource "aws_secretsmanager_secret" "db_url" {
 
 resource "aws_secretsmanager_secret_version" "db_url_v" {
   secret_id = aws_secretsmanager_secret.db_url.id
+  # Importante: urlencode del password
   secret_string = "postgresql+asyncpg://${aws_db_instance.postgres.username}:${urlencode(random_password.db_password.result)}@${aws_db_instance.postgres.address}:${aws_db_instance.postgres.port}/${aws_db_instance.postgres.db_name}"
 }
-
 
 resource "aws_secretsmanager_secret" "db_password" {
   name                    = "orders/DB_PASSWORD"
@@ -233,7 +232,7 @@ resource "aws_secretsmanager_secret" "db_password" {
   tags                    = { Project = var.project, Env = var.env }
 }
 
-resource "aws_secretsmanager_secret_version" "db_password" {
+resource "aws_secretsmanager_secret_version" "db_password_v" {
   secret_id     = aws_secretsmanager_secret.db_password.id
   secret_string = random_password.db_password.result
 }
@@ -300,7 +299,7 @@ resource "aws_ecs_cluster" "orders" {
 # ============================================================
 # IAM ROLES
 # ============================================================
-# Task Execution Role (ECR + logs + Secrets)
+# Execution Role (ECR + logs + Secrets)
 data "aws_iam_policy_document" "task_exec_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -316,16 +315,18 @@ resource "aws_iam_role" "task_exec_role" {
   assume_role_policy = data.aws_iam_policy_document.task_exec_assume.json
   tags               = { Project = var.project, Env = var.env }
 }
+
 resource "aws_iam_role_policy_attachment" "exec_ecr" {
   role       = aws_iam_role.task_exec_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
+
 resource "aws_iam_role_policy_attachment" "exec_secrets" {
   role       = aws_iam_role.task_exec_role.name
   policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
 }
 
-# Task Role (permisos de la app; añade SQS si aplica)
+# Task Role (permisos de la app)
 data "aws_iam_policy_document" "task_app_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -335,6 +336,7 @@ data "aws_iam_policy_document" "task_app_assume" {
     }
   }
 }
+
 resource "aws_iam_role" "task_app_role" {
   name               = "orders-task-app"
   assume_role_policy = data.aws_iam_policy_document.task_app_assume.json
@@ -373,8 +375,8 @@ resource "aws_ecs_task_definition" "orders" {
       environment = [
         { name = "ENV", value = var.env },
         { name = "PORT", value = tostring(var.app_port) },
-        { name = "RUN_DDL_ON_STARTUP", value = "false" },  
-        { name = "WEB_CONCURRENCY", value = "2" }          
+        { name = "RUN_DDL_ON_STARTUP", value = "false" },
+        { name = "WEB_CONCURRENCY", value = "2" }
       ],
       secrets = [
         { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.db_url.arn }
@@ -394,7 +396,6 @@ resource "aws_ecs_task_definition" "orders" {
         retries     = 3,
         startPeriod = 60
       }
-
     }
   ])
 
