@@ -203,7 +203,7 @@ resource "aws_secretsmanager_secret" "db_url" {
   name                    = "orders/DB_URL"
   description             = "Database connection URL for Orders service"
   recovery_window_in_days = 7
-  lifecycle { prevent_destroy = true }
+  # lifecycle { prevent_destroy = true }
   tags = { Project = var.project, Env = var.env }
 }
 
@@ -216,7 +216,7 @@ resource "aws_secretsmanager_secret" "db_password" {
   name                    = "orders/DB_PASSWORD"
   description             = "PostgreSQL master password"
   recovery_window_in_days = 7
-  lifecycle { prevent_destroy = true }
+  # lifecycle { prevent_destroy = true }
   tags = { Project = var.project, Env = var.env }
 }
 
@@ -423,7 +423,7 @@ resource "aws_ecr_repository" "haproxy" {
   name = "${var.project}-${var.env}-haproxy-consumer"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
-  lifecycle { prevent_destroy = true }
+  # lifecycle { prevent_destroy = true }
   tags = { Project = var.project, Env = var.env }
 }
 
@@ -431,7 +431,7 @@ resource "aws_ecr_repository" "worker" {
   name = "${var.project}-${var.env}-orders-consumer"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
-  lifecycle { prevent_destroy = true }
+  # lifecycle { prevent_destroy = true }
   tags = { Project = var.project, Env = var.env }
 }
 
