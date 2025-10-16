@@ -1,17 +1,18 @@
-version: "3.9"
+# docker-compose.dev.yml  (dev contra RDS + SQS)
+# Nota: puedes borrar la línea `version:`; Compose v2 la ignora.
 
 services:
+  # ---------- Infra opcional (solo si quieres DB local) ----------
   db:
     image: postgres:16-alpine
     container_name: orders-db
+    profiles: ["local-db"]              # ← NO arranca por defecto
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-orders}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-orders}"]
       interval: 5s
@@ -26,10 +27,8 @@ services:
       sh -lc 'redis-server --requirepass "${REDIS_PASSWORD:-redis}" --appendonly yes'
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis}
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    ports: ["6379:6379"]
+    volumes: [ "redis_data:/data" ]
     healthcheck:
       test: ["CMD-SHELL", 'redis-cli -a "${REDIS_PASSWORD:-redis}" ping | grep PONG']
       interval: 5s
@@ -37,11 +36,12 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # ---------- Init de DB local (solo si usas perfil local-db) ----------
   db-init-orders:
     image: python:3.11-slim-bookworm
+    profiles: ["local-db"]              # ← NO arranca por defecto
     depends_on:
-      db:
-        condition: service_healthy
+      db: { condition: service_healthy }
     environment:
       PGHOST: db
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -54,33 +54,91 @@ services:
       bash -lc "pip install -q 'psycopg[binary]>=3.1,<4' && python create_orders_db.py"
     restart: "no"
 
+  # ---------- Micro de Orders (usa RDS desde .env) ----------
   orders-service:
     build:
       context: ./orders-service
+    container_name: orders-service
     environment:
       PORT: ${PORT:-3000}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-orders}
-      # Redis con contraseña (como tu original)
+      DATABASE_URL: ${DATABASE_URL}      # ← RDS de tu .env
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
-      SQLA_ECHO: "0"
-      RUN_DDL_ON_STARTUP: "true"    
-      WEB_CONCURRENCY: "1"         
+      SQLA_ECHO: ${SQLA_ECHO:-0}
+      RUN_DDL_ON_STARTUP: ${RUN_DDL_ON_STARTUP:-false}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
     working_dir: /app
     depends_on:
-      db: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      db-init-orders: { condition: service_completed_successfully }
-    ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      redis: { condition: service_healthy }   # ← sin db ni init
+    ports: ["${PORT:-3000}:${PORT:-3000}"]
     volumes:
       - ./orders-service:/app
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:${PORT:-3000}/health || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 30
+      disable: true                           # ← evita bloqueo por falta de curl
+    restart: unless-stopped
+
+  # ---------- HAProxy (LB hacia orders-service) ----------
+  haproxy:
+    image: haproxy:2.9
+    container_name: orders-haproxy
+    volumes:
+      - ./consumer-lb/app/load-balancer/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    command: ["haproxy","-W","-db","-f","/usr/local/etc/haproxy/haproxy.cfg"]
+    ports: ["8080:8080","8404:8404"]
+    depends_on:
+      orders-service:
+        condition: service_started           # ← no exige healthcheck
+    healthcheck:
+      disable: true                          # ← dev
+    restart: unless-stopped
+
+  # ---------- Consumer SQS (apunta a HAProxy) ----------
+  consumer:
+    image: python:3.12-slim
+    container_name: orders-consumer
+    working_dir: /app
+    command: >
+      bash -lc "
+        pip install --no-cache-dir boto3==1.40.30 httpx==0.28.1 &&
+        python worker.py
+      "
+    volumes:
+      # En Windows:
+      - ${USERPROFILE}/.aws:/root/.aws:ro
+      # (En Linux/Mac, cambia por: - ~/.aws:/root/.aws:ro)
+      - ./consumer-lb/app/consumer/worker.py:/app/worker.py:ro
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}       # ← FIFO real de AWS
+      LB_TARGET_URL: http://haproxy:8080/orders
+      SQS_BATCH: ${SQS_BATCH:-10}
+      SQS_WAIT: ${SQS_WAIT:-20}
+      SQS_VISIBILITY: ${SQS_VISIBILITY:-60}
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30}
+    depends_on:
+      haproxy:
+        condition: service_started
+    restart: unless-stopped
+
+  # ---------- Worker Celery (usa misma DB/Redis que orders) ----------
+  worker-orders:
+    build:
+      context: ./orders-service
+      dockerfile: Dockerfile
+    container_name: worker-orders
+    command: celery -A app.tasks:celery worker -l INFO --concurrency=1 --pool=solo
+    environment:
+      DATABASE_URL: ${DATABASE_URL}         # ← RDS
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      LOG_LEVEL: INFO
+    working_dir: /app
+    volumes:
+      - ./orders-service:/app
+    depends_on:
+      redis: { condition: service_healthy }
     restart: unless-stopped
 
 volumes:
