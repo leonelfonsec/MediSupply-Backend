@@ -124,3 +124,47 @@ output "start_database" {
   description = "Command to start database"
   value       = "aws rds start-db-instance --db-instance-identifier ${aws_db_instance.postgres.id}"
 }
+
+# ============================================================
+# HAPROXY + CONSUMER (SQS) OUTPUTS
+# ============================================================
+output "haproxy_consumer_sqs_fifo_url" {
+  description = "URL de la cola FIFO para el consumer"
+  value       = aws_sqs_queue.haproxy_consumer_orders_events_fifo.url
+}
+
+output "haproxy_consumer_sqs_dlq_url" {
+  description = "URL de la DLQ (FIFO) del consumer"
+  value       = aws_sqs_queue.haproxy_consumer_orders_events_dlq.url
+}
+
+output "haproxy_consumer_log_group" {
+  description = "Nombre del Log Group en CloudWatch para HAProxy + worker"
+  value       = aws_cloudwatch_log_group.haproxy_consumer_lg.name
+}
+
+output "haproxy_consumer_security_group_id" {
+  description = "Security Group ID del servicio HAProxy + consumer"
+  value       = aws_security_group.haproxy_consumer_sg.id
+}
+
+output "haproxy_consumer_taskdef_arn" {
+  description = "ARN de la Task Definition (haproxy + worker)"
+  value       = aws_ecs_task_definition.haproxy_consumer_td.arn
+}
+
+output "haproxy_consumer_service_name" {
+  description = "Nombre del ECS Service (haproxy + worker)"
+  value       = aws_ecs_service.haproxy_consumer_svc.name
+}
+
+output "haproxy_consumer_service_arn" {
+  description = "ARN del ECS Service (haproxy + worker)"
+  value       = aws_ecs_service.haproxy_consumer_svc.id
+}
+
+# Comando útil para logs
+output "haproxy_consumer_tail_logs" {
+  description = "Comando para seguir logs del componente en CloudWatch"
+  value       = "aws logs tail ${aws_cloudwatch_log_group.haproxy_consumer_lg.name} --follow --region ${var.aws_region}"
+}

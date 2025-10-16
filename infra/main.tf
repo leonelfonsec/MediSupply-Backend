@@ -1,14 +1,12 @@
 terraform {
   backend "s3" {
-    bucket               = "miso-tfstate-838693051133"   
-    key                  = "infra.tfstate"               
-    region               = "us-east-1"
-    encrypt              = true
-    dynamodb_table       = "miso-tf-locks"               
-    # workspace_key_prefix = "medi-supply"
+    bucket         = "miso-tfstate-838693051133"
+    key            = "infra.tfstate"
+    region         = "us-east-1"
+    encrypt        = true
+    dynamodb_table = "miso-tf-locks"
   }
 }
-
 
 provider "aws" {
   region = var.aws_region
@@ -98,7 +96,6 @@ resource "random_password" "db_password" {
   override_special = "-_."
 }
 
-# Subnet groups
 resource "aws_db_subnet_group" "postgres_private" {
   name       = "orders-postgres-subnets"
   subnet_ids = module.vpc.private_subnets
@@ -111,7 +108,6 @@ resource "aws_db_subnet_group" "postgres_public" {
   tags       = { Name = "orders-postgres-subnets-public", Project = var.project, Env = var.env }
 }
 
-# Parameter Group
 resource "aws_db_parameter_group" "postgres" {
   family = "postgres15"
   name   = "orders-postgres-params"
@@ -120,24 +116,17 @@ resource "aws_db_parameter_group" "postgres" {
     name  = "shared_preload_libraries"
     value = "pg_stat_statements"
   }
-
   parameter {
     name  = "log_statement"
     value = "all"
   }
-
   parameter {
     name  = "log_min_duration_statement"
     value = "1000"
   }
-
-  tags = {
-    Project = var.project
-    Env     = var.env
-  }
+  tags = { Project = var.project, Env = var.env }
 }
 
-# Enhanced Monitoring
 resource "aws_iam_role" "rds_monitoring" {
   name = "orders-rds-monitoring"
   assume_role_policy = jsonencode({
@@ -156,7 +145,6 @@ resource "aws_iam_role_policy_attachment" "rds_monitoring" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
 }
 
-# Instancia RDS PostgreSQL (expuesta temporalmente)
 resource "aws_db_instance" "postgres" {
   identifier = "orders-postgres"
 
@@ -186,7 +174,6 @@ resource "aws_db_instance" "postgres" {
   maintenance_window      = "sun:04:00-sun:05:00"
   copy_tags_to_snapshot   = true
 
-  # TEMP para rapidez en pruebas
   skip_final_snapshot      = true
   deletion_protection      = false
   delete_automated_backups = true
@@ -216,12 +203,12 @@ resource "aws_secretsmanager_secret" "db_url" {
   name                    = "orders/DB_URL"
   description             = "Database connection URL for Orders service"
   recovery_window_in_days = 7
-  tags                    = { Project = var.project, Env = var.env }
+  lifecycle { prevent_destroy = true }
+  tags = { Project = var.project, Env = var.env }
 }
 
 resource "aws_secretsmanager_secret_version" "db_url_v" {
-  secret_id = aws_secretsmanager_secret.db_url.id
-  # Importante: urlencode del password
+  secret_id     = aws_secretsmanager_secret.db_url.id
   secret_string = "postgresql+asyncpg://${aws_db_instance.postgres.username}:${urlencode(random_password.db_password.result)}@${aws_db_instance.postgres.address}:${aws_db_instance.postgres.port}/${aws_db_instance.postgres.db_name}"
 }
 
@@ -229,7 +216,8 @@ resource "aws_secretsmanager_secret" "db_password" {
   name                    = "orders/DB_PASSWORD"
   description             = "PostgreSQL master password"
   recovery_window_in_days = 7
-  tags                    = { Project = var.project, Env = var.env }
+  lifecycle { prevent_destroy = true }
+  tags = { Project = var.project, Env = var.env }
 }
 
 resource "aws_secretsmanager_secret_version" "db_password_v" {
@@ -283,7 +271,7 @@ resource "aws_cloudwatch_metric_alarm" "database_connections" {
 }
 
 # ============================================================
-# ECS CLUSTER
+# ECS CLUSTER (orders)
 # ============================================================
 resource "aws_ecs_cluster" "orders" {
   name = "orders-cluster"
@@ -297,9 +285,8 @@ resource "aws_ecs_cluster" "orders" {
 }
 
 # ============================================================
-# IAM ROLES
+# IAM ROLES para ORDERS
 # ============================================================
-# Execution Role (ECR + logs + Secrets)
 data "aws_iam_policy_document" "task_exec_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -326,7 +313,6 @@ resource "aws_iam_role_policy_attachment" "exec_secrets" {
   policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
 }
 
-# Task Role (permisos de la app)
 data "aws_iam_policy_document" "task_app_assume" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -344,7 +330,7 @@ resource "aws_iam_role" "task_app_role" {
 }
 
 # ============================================================
-# CLOUDWATCH LOGS
+# CLOUDWATCH LOGS de ORDERS
 # ============================================================
 resource "aws_cloudwatch_log_group" "orders" {
   name              = "/ecs/orders"
@@ -353,7 +339,7 @@ resource "aws_cloudwatch_log_group" "orders" {
 }
 
 # ============================================================
-# ECS TASK DEFINITION
+# ECS TASK DEFINITION de ORDERS (tu servicio ya existente)
 # ============================================================
 resource "aws_ecs_task_definition" "orders" {
   family                   = "orders"
@@ -403,7 +389,7 @@ resource "aws_ecs_task_definition" "orders" {
 }
 
 # ============================================================
-# ECS SERVICE (SIN LB)
+# ECS SERVICE de ORDERS (SIN LB)
 # ============================================================
 resource "aws_ecs_service" "orders" {
   name            = "orders-svc"
@@ -422,4 +408,223 @@ resource "aws_ecs_service" "orders" {
   deployment_maximum_percent         = 200
 
   tags = { Project = var.project, Env = var.env }
+}
+
+# ============================================================
+# HAPROXY + CONSUMER (SQS)
+# ============================================================
+
+# Descubre los repos existentes en ECR (evitas variables para imágenes):
+#data "aws_ecr_repository" "haproxy" { name = "haproxy-consumer" }
+#data "aws_ecr_repository" "worker" { name = "orders-consumer" }
+
+# creacion recursos
+resource "aws_ecr_repository" "haproxy" {
+  name = "${var.project}-${var.env}-haproxy-consumer"
+  image_scanning_configuration { scan_on_push = true }
+  encryption_configuration { encryption_type = "AES256" }
+  lifecycle { prevent_destroy = true }
+  tags = { Project = var.project, Env = var.env }
+}
+
+resource "aws_ecr_repository" "worker" {
+  name = "${var.project}-${var.env}-orders-consumer"
+  image_scanning_configuration { scan_on_push = true }
+  encryption_configuration { encryption_type = "AES256" }
+  lifecycle { prevent_destroy = true }
+  tags = { Project = var.project, Env = var.env }
+}
+
+# SQS FIFO + DLQ
+resource "aws_sqs_queue" "haproxy_consumer_orders_events_dlq" {
+  name                        = "${var.project}-${var.env}-orders-events-dlq.fifo"
+  fifo_queue                  = true
+  content_based_deduplication = true
+  message_retention_seconds   = 1209600
+  receive_wait_time_seconds   = 20
+  tags                        = { Project = var.project, Env = var.env, Component = "haproxy-consumer" }
+}
+
+resource "aws_sqs_queue" "haproxy_consumer_orders_events_fifo" {
+  name                        = "${var.project}-${var.env}-orders-events.fifo"
+  fifo_queue                  = true
+  content_based_deduplication = true
+  visibility_timeout_seconds  = 60
+  message_retention_seconds   = 1209600
+  receive_wait_time_seconds   = 20
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.haproxy_consumer_orders_events_dlq.arn
+    maxReceiveCount     = 5
+  })
+  tags = { Project = var.project, Env = var.env, Component = "haproxy-consumer" }
+}
+
+# IAM para la Task del consumer
+data "aws_iam_policy_document" "haproxy_consumer_ecs_tasks_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "haproxy_consumer_task_role" {
+  name               = "${var.project}-${var.env}-haproxy-consumer-task-role"
+  assume_role_policy = data.aws_iam_policy_document.haproxy_consumer_ecs_tasks_assume.json
+  tags               = { Project = var.project, Env = var.env }
+}
+
+data "aws_iam_policy_document" "haproxy_consumer_sqs_consumer" {
+  statement {
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:ChangeMessageVisibility",
+      "sqs:GetQueueAttributes",
+      "sqs:GetQueueUrl"
+    ]
+    resources = [
+      aws_sqs_queue.haproxy_consumer_orders_events_fifo.arn,
+      aws_sqs_queue.haproxy_consumer_orders_events_dlq.arn
+    ]
+  }
+}
+
+resource "aws_iam_policy" "haproxy_consumer_sqs_consumer" {
+  name   = "${var.project}-${var.env}-sqs-consumer-policy"
+  policy = data.aws_iam_policy_document.haproxy_consumer_sqs_consumer.json
+}
+
+resource "aws_iam_role_policy_attachment" "haproxy_consumer_attach_sqs" {
+  role       = aws_iam_role.haproxy_consumer_task_role.name
+  policy_arn = aws_iam_policy.haproxy_consumer_sqs_consumer.arn
+}
+
+resource "aws_iam_role" "haproxy_consumer_exec_role" {
+  name               = "${var.project}-${var.env}-haproxy-consumer-exec-role"
+  assume_role_policy = data.aws_iam_policy_document.haproxy_consumer_ecs_tasks_assume.json
+  tags               = { Project = var.project, Env = var.env }
+}
+
+resource "aws_iam_role_policy_attachment" "haproxy_consumer_exec_attach" {
+  role       = aws_iam_role.haproxy_consumer_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# Logs del componente
+resource "aws_cloudwatch_log_group" "haproxy_consumer_lg" {
+  name              = "/ecs/${var.project}-${var.env}-haproxy-consumer"
+  retention_in_days = 14
+  tags              = { Project = var.project, Env = var.env }
+}
+
+# SG del componente
+resource "aws_security_group" "haproxy_consumer_sg" {
+  name        = "${var.project}-${var.env}-haproxy-consumer-sg"
+  description = "SG for HAProxy front + egress to Orders"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all egress"
+  }
+
+  tags = { Project = var.project, Env = var.env }
+}
+
+# Task Definition: HAProxy + Worker (usando ECR existentes)
+resource "aws_ecs_task_definition" "haproxy_consumer_td" {
+  family                   = "${var.project}-${var.env}-haproxy-consumer"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  task_role_arn            = aws_iam_role.haproxy_consumer_task_role.arn
+  execution_role_arn       = aws_iam_role.haproxy_consumer_exec_role.arn
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([
+    {
+      name         = "haproxy",
+      image        = "${aws_ecr_repository.haproxy.repository_url}:latest",
+      essential    = true,
+      portMappings = [{ containerPort = 80, hostPort = 80, protocol = "tcp" }],
+      logConfiguration = {
+        logDriver = "awslogs",
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.haproxy_consumer_lg.name,
+          awslogs-region        = var.aws_region,
+          awslogs-stream-prefix = "haproxy"
+        }
+      },
+      environment = [
+        { "name" : "AWS_REGION", "value" : var.aws_region }
+      ]
+    },
+    {
+      name      = "worker",
+      image     = "${aws_ecr_repository.worker.repository_url}:latest",
+      essential = true,
+      logConfiguration = {
+        logDriver = "awslogs",
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.haproxy_consumer_lg.name,
+          awslogs-region        = var.aws_region,
+          awslogs-stream-prefix = "worker"
+        }
+      },
+      environment = [
+        { "name" : "AWS_REGION", "value" : var.aws_region },
+        { "name" : "SQS_QUEUE_URL", "value" : aws_sqs_queue.haproxy_consumer_orders_events_fifo.url },
+        { "name" : "LB_TARGET_URL", "value" : "http://127.0.0.1/orders" },
+        { "name" : "SQS_WAIT", "value" : "20" },
+        { "name" : "SQS_BATCH", "value" : "10" },
+        { "name" : "SQS_VISIBILITY", "value" : "60" },
+        { "name" : "HTTP_TIMEOUT", "value" : "30" }
+      ]
+    }
+  ])
+
+  tags = { Project = var.project, Env = var.env }
+}
+
+# Service del componente (en el cluster orders)
+resource "aws_ecs_service" "haproxy_consumer_svc" {
+  name            = "${var.project}-${var.env}-haproxy-consumer-svc"
+  cluster         = aws_ecs_cluster.orders.id
+  task_definition = aws_ecs_task_definition.haproxy_consumer_td.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = module.vpc.private_subnets
+    security_groups  = [aws_security_group.haproxy_consumer_sg.id]
+    assign_public_ip = false
+  }
+
+  deployment_minimum_healthy_percent = 50
+  deployment_maximum_percent         = 200
+
+  tags = { Project = var.project, Env = var.env }
+
+  depends_on = [
+    aws_sqs_queue.haproxy_consumer_orders_events_fifo,
+    aws_cloudwatch_log_group.haproxy_consumer_lg
+  ]
 }

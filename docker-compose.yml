@@ -1,6 +1,7 @@
 version: "3.9"
 
 services:
+  # ---------- Infra base ----------
   redis:
     image: redis:7-alpine
     container_name: orders-redis
@@ -19,63 +20,103 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # ---------- Orders ----------
   orders-service:
     build:
       context: ./orders-service
     environment:
-      # Puerto prod-like (ECS suele usar 8000)
       PORT: ${PORT:-8000}
-
-      # DB externa (p.ej. la RDS) - debe ser async:
-      # DATABASE_URL=postgresql+asyncpg://orders_user:PASS@host:5432/orders
+      # Si usas RDS en local, exporta DATABASE_URL en .env (sin comillas) y borra la línea siguiente.
       DATABASE_URL: ${DATABASE_URL}
-
-      # Redis local con password (igual que arriba)
+      # Redis local con password
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
-
       SQLA_ECHO: ${SQLA_ECHO:-0}
     working_dir: /app
     depends_on:
       redis: { condition: service_healthy }
+      # Si activas el perfil localdb, orders-db será requerido:
+      orders-db:
+        condition: service_healthy
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     healthcheck:
+      # Asegúrate que tu imagen tenga curl o reemplaza por wget/busybox
       test: ["CMD-SHELL", "curl -fsS http://localhost:${PORT:-8000}/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 30
     restart: unless-stopped
+    profiles: ["${APP_PROFILE:-dev}"]
 
+  # Base de datos local de Orders (opcional para dev). Activa con: COMPOSE_PROFILES=localdb
+  orders-db:
+    image: postgres:16-alpine
+    container_name: orders-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-orders_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orders_pass}
+      POSTGRES_DB: orders
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orders_user} -d orders"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    profiles: ["localdb"]
+
+  worker-orders:
+    build:
+      context: ./orders-service
+      dockerfile: Dockerfile
+    command: celery -A app.tasks:celery worker -l INFO --concurrency=1 --pool=solo
+    environment:
+      # En local, si activaste orders-db:
+      DATABASE_URL: ${ORDERS_DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-orders_user}:${POSTGRES_PASSWORD:-orders_pass}@orders-db:5432/orders}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-redis}@redis:6379/0
+    working_dir: /code
+    volumes:
+      - ./orders-service:/code
+    depends_on:
+      redis: { condition: service_healthy }
+      orders-db:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["${APP_PROFILE:-dev}","localdb"]
+
+  # ---------- Catálogo ----------
   catalog-db:
     image: postgres:16-alpine
     container_name: catalog-db
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-catalog_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-catalog_pass}
       POSTGRES_DB: catalogo
     ports:
-      - "5433:5432"  # Puerto diferente para no conflicto
+      - "5433:5432"
     volumes:
       - catalog_pgdata:/var/lib/postgresql/data
       - ./catalogo-service/data/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d catalogo"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-catalog_user} -d catalogo"]
       interval: 5s
       timeout: 5s
       retries: 10
-  
-  # === Inicialización de la base de datos "catalogo" ===
+
   db-init-catalog:
     image: python:3.11-slim-bookworm
     depends_on:
-      catalog-db:
-        condition: service_healthy
+      catalog-db: { condition: service_healthy }
     environment:
       PGHOST: catalog-db
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER:-catalog_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-catalog_pass}
       TARGET_DB: catalogo
     volumes:
       - ./catalogo-service/app/create_catalogo_db.py:/app/create_catalogo_db.py:ro
@@ -84,74 +125,27 @@ services:
       bash -lc "pip install -q 'psycopg[binary]>=3.1,<4' && python create_catalogo_db.py"
     restart: "no"
 
-  # === Servicio principal de Catalogo (FastAPI) ===
   catalog-service:
     build:
       context: ./catalogo-service
       dockerfile: Dockerfile
     container_name: catalog-service
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@catalog-db:5432/catalogo
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1  # Base de datos Redis diferente
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-catalog_user}:${POSTGRES_PASSWORD:-catalog_pass}@catalog-db:5432/catalogo
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/1
     working_dir: /app
     depends_on:
       catalog-db: { condition: service_healthy }
       redis: { condition: service_healthy }
       db-init-catalog: { condition: service_completed_successfully }
-    ports: ["3001:8080"]  # Puerto diferente al orders-service
+    ports: ["3001:8080"]
     profiles: ["${APP_PROFILE:-dev}"]
     volumes:
       - type: bind
         source: ./catalogo-service
         target: /app
-    
 
-
-
-  # === Servicio principal de Cliente (FastAPI) ===
-  cliente-service:
-    build:
-      context: ./cliente-service
-      dockerfile: Dockerfile
-    container_name: cliente-service
-    environment:
-      DATABASE_URL: postgresql+asyncpg://cliente_user:cliente_pass@cliente-db:5432/cliente_db
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/2  # Base de datos Redis diferente
-      SLA_MAX_RESPONSE_MS: 2000
-      LOG_LEVEL: INFO
-      DEBUG: false
-      ORDERS_SERVICE_URL: http://orders-service:3000
-      CATALOGO_SERVICE_URL: http://catalog-service:3001
-      ALLOWED_ORIGINS: "*"
-      ALLOWED_METHODS: "*"
-      ALLOWED_HEADERS: "*"
-    working_dir: /app
-    depends_on:
-      cliente-db: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      db-init-cliente: { condition: service_completed_successfully }
-    ports: ["3003:8000"]  # Puerto diferente a los otros servicios
-    profiles: ["${APP_PROFILE:-dev}"]
-    volumes:
-      - type: bind
-        source: ./cliente-service
-        target: /app
-
-  # === Servicio de rutas (FastAPI) ===
-  backend:
-    build:
-      context: ./ruta-service
-    container_name: fastapi-backend
-    restart: always
-    env_file: .env
-    depends_on:
-      - db
-    ports:
-      - "8001:8000"
-    volumes:
-      - ./ruta-service:/app
-
-  # === Cliente Service Database ===
+  # ---------- Cliente ----------
   cliente-db:
     image: postgres:16-alpine
     environment:
@@ -170,12 +164,10 @@ services:
       retries: 3
       start_period: 30s
 
-  # === Inicialización de la base de datos "cliente" ===
   db-init-cliente:
     image: python:3.11-slim
     depends_on:
-      cliente-db:
-        condition: service_healthy
+      cliente-db: { condition: service_healthy }
     environment:
       PGHOST: cliente-db
       POSTGRES_USER: cliente_user
@@ -187,7 +179,89 @@ services:
     command: >
       bash -lc "pip install -q 'psycopg[binary]>=3.1,<4' && python create_cliente_db.py"
     restart: "no"
-        
+
+  cliente-service:
+    build:
+      context: ./cliente-service
+      dockerfile: Dockerfile
+    container_name: cliente-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cliente_user:cliente_pass@cliente-db:5432/cliente_db
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis}@redis:6379/2
+      SLA_MAX_RESPONSE_MS: 2000
+      LOG_LEVEL: INFO
+      DEBUG: "false"
+      # Usa nombres de servicio y puertos de contenedor:
+      ORDERS_SERVICE_URL: http://orders-service:${PORT:-8000}
+      CATALOGO_SERVICE_URL: http://catalog-service:8080
+      ALLOWED_ORIGINS: "*"
+      ALLOWED_METHODS: "*"
+      ALLOWED_HEADERS: "*"
+    working_dir: /app
+    depends_on:
+      cliente-db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      db-init-cliente: { condition: service_completed_successfully }
+    ports: ["3003:8000"]
+    profiles: ["${APP_PROFILE:-dev}"]
+    volumes:
+      - type: bind
+        source: ./cliente-service
+        target: /app
+
+  # ---------- Rutas (tu backend extra) ----------
+  backend:
+    build:
+      context: ./ruta-service
+    container_name: fastapi-backend
+    restart: always
+    env_file: .env
+    depends_on:
+      - cliente-db
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./ruta-service:/app
+
+  # ---------- HAProxy + Consumer ----------
+  haproxy:
+    image: haproxy:2.9
+    volumes:
+      - ./consumer-lb/app/load-balancer/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    command: ["haproxy","-W","-db","-f","/usr/local/etc/haproxy/haproxy.cfg"]
+    ports: ["8080:8080","8404:8404"]
+    depends_on:
+      orders-service: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8404/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  consumer:
+    image: python:3.12-slim
+    working_dir: /app
+    command: >
+      bash -lc "
+        pip install --no-cache-dir boto3==1.40.30 httpx==0.28.1 &&
+        python worker.py
+      "
+    volumes:
+      - ./consumer-lb/app/consumer/worker.py:/app/worker.py:ro
+      - ~/.aws:/root/.aws:ro  # Credenciales de AWS para dev
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL:-https://sqs.us-east-1.amazonaws.com/123456789012/orders-events.fifo}
+      LB_TARGET_URL: http://haproxy:8080/orders
+      SQS_BATCH: ${SQS_BATCH:-10}
+      SQS_WAIT: ${SQS_WAIT:-20}
+      SQS_VISIBILITY: ${SQS_VISIBILITY:-60}
+      HTTP_TIMEOUT: ${HTTP_TIMEOUT:-30}
+    depends_on:
+      haproxy: { condition: service_healthy }
+    restart: unless-stopped
+
 volumes:
   pgdata:
   catalog_pgdata:
