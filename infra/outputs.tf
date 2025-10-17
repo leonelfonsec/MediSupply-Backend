@@ -168,3 +168,25 @@ output "haproxy_consumer_tail_logs" {
   description = "Comando para seguir logs del componente en CloudWatch"
   value       = "aws logs tail ${aws_cloudwatch_log_group.haproxy_consumer_lg.name} --follow --region ${var.aws_region}"
 }
+
+# ---------- BFF outputs ----------
+output "bff_alb_dns" {
+  description = "DNS público del ALB del BFF"
+  value       = aws_lb.bff_alb.dns_name
+}
+
+output "bff_ecr_repo_url" {
+  description = "URL del repo ECR del BFF"
+  value       = aws_ecr_repository.bff.repository_url
+}
+
+output "bff_service_name" {
+  description = "Nombre del servicio ECS del BFF"
+  value       = aws_ecs_service.bff_svc.name
+}
+
+output "bff_taskdef_arn" {
+  description = "ARN de la task definition del BFF"
+  value       = aws_ecs_task_definition.bff_td.arn
+}
+
