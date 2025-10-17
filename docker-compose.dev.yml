@@ -106,7 +106,7 @@ services:
     volumes:
       # En Windows:
       - ${USERPROFILE}/.aws:/root/.aws:ro
-      # (En Linux/Mac, cambia por: - ~/.aws:/root/.aws:ro)
+      # (En Linux/Mac, cambiar por: - ~/.aws:/root/.aws:ro)
       - ./consumer-lb/app/consumer/worker.py:/app/worker.py:ro
     environment:
       AWS_REGION: ${AWS_REGION:-us-east-1}
