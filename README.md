@@ -55,8 +55,6 @@ MediSupply-Backend/
 
 ---
 
-## 📁 **Opción 2: Solo Terraform (Más Detallado)**
-```markdown
 ## 🏗️ Estructura de Infraestructura (Terraform)
 ```
 infra/terraform/
@@ -93,4 +91,3 @@ infra/terraform/
         ├── main.tf            # SQS Queues, HAProxy, Worker
         ├── variables.tf
         └── outputs.tf
-```
