@@ -56,5 +56,11 @@ variable "bff_env" {
   }
 }
 
+variable "use_haproxy" {
+  type        = bool
+  default     = true
+  description = "Si true, el worker apunta a HAProxy local (127.0.0.1/orders). Si false, apunta al ALB."
+}
+
 
 

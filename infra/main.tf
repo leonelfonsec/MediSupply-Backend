@@ -203,8 +203,7 @@ resource "aws_secretsmanager_secret" "db_url" {
   name                    = "orders/DB_URL"
   description             = "Database connection URL for Orders service"
   recovery_window_in_days = 7
-  # lifecycle { prevent_destroy = true }
-  tags = { Project = var.project, Env = var.env }
+  tags                    = { Project = var.project, Env = var.env }
 }
 
 resource "aws_secretsmanager_secret_version" "db_url_v" {
@@ -216,8 +215,7 @@ resource "aws_secretsmanager_secret" "db_password" {
   name                    = "orders/DB_PASSWORD"
   description             = "PostgreSQL master password"
   recovery_window_in_days = 7
-  # lifecycle { prevent_destroy = true }
-  tags = { Project = var.project, Env = var.env }
+  tags                    = { Project = var.project, Env = var.env }
 }
 
 resource "aws_secretsmanager_secret_version" "db_password_v" {
@@ -370,9 +368,9 @@ resource "aws_ecs_task_definition" "orders" {
       logConfiguration = {
         logDriver = "awslogs",
         options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.orders.name,
-          "awslogs-region"        = var.aws_region,
-          "awslogs-stream-prefix" = "orders"
+          awslogs-group         = aws_cloudwatch_log_group.orders.name,
+          awslogs-region        = var.aws_region,
+          awslogs-stream-prefix = "orders"
         }
       },
       healthCheck = {
@@ -413,17 +411,10 @@ resource "aws_ecs_service" "orders" {
 # ============================================================
 # HAPROXY + CONSUMER (SQS)
 # ============================================================
-
-# Descubre los repos existentes en ECR (evitas variables para imágenes):
-#data "aws_ecr_repository" "haproxy" { name = "haproxy-consumer" }
-#data "aws_ecr_repository" "worker" { name = "orders-consumer" }
-
-# creacion recursos
 resource "aws_ecr_repository" "haproxy" {
   name = "${var.project}-${var.env}-haproxy-consumer"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
-  # lifecycle { prevent_destroy = true }
   tags = { Project = var.project, Env = var.env }
 }
 
@@ -431,7 +422,6 @@ resource "aws_ecr_repository" "worker" {
   name = "${var.project}-${var.env}-orders-consumer"
   image_scanning_configuration { scan_on_push = true }
   encryption_configuration { encryption_type = "AES256" }
-  # lifecycle { prevent_destroy = true }
   tags = { Project = var.project, Env = var.env }
 }
 
@@ -530,7 +520,7 @@ resource "aws_security_group" "haproxy_consumer_sg" {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] # ajusta si será privado
     description = "HTTP"
   }
 
@@ -541,16 +531,12 @@ resource "aws_security_group" "haproxy_consumer_sg" {
     cidr_blocks = ["0.0.0.0/0"]
     description = "Allow all egress"
   }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all egress"
-  }
-
 
   tags = { Project = var.project, Env = var.env }
+}
+
+locals {
+  consumer_lb_target = var.use_haproxy ? "http://127.0.0.1/orders" : "http://${aws_lb.bff_alb.dns_name}/orders"
 }
 
 # Task Definition: HAProxy + Worker (usando ECR existentes)
@@ -562,6 +548,7 @@ resource "aws_ecs_task_definition" "haproxy_consumer_td" {
   memory                   = "1024"
   task_role_arn            = aws_iam_role.haproxy_consumer_task_role.arn
   execution_role_arn       = aws_iam_role.haproxy_consumer_exec_role.arn
+
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
@@ -582,7 +569,7 @@ resource "aws_ecs_task_definition" "haproxy_consumer_td" {
         }
       },
       environment = [
-        { "name" : "AWS_REGION", "value" : var.aws_region }
+        { name = "AWS_REGION", value = var.aws_region }
       ]
     },
     {
@@ -598,13 +585,13 @@ resource "aws_ecs_task_definition" "haproxy_consumer_td" {
         }
       },
       environment = [
-        { "name" : "AWS_REGION", "value" : var.aws_region },
-        { "name" : "SQS_QUEUE_URL", "value" : aws_sqs_queue.haproxy_consumer_orders_events_fifo.url },
-        { "name" : "LB_TARGET_URL", "value" : "http://127.0.0.1/orders" },
-        { "name" : "SQS_WAIT", "value" : "20" },
-        { "name" : "SQS_BATCH", "value" : "10" },
-        { "name" : "SQS_VISIBILITY", "value" : "60" },
-        { "name" : "HTTP_TIMEOUT", "value" : "30" }
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "SQS_QUEUE_URL", value = aws_sqs_queue.haproxy_consumer_orders_events_fifo.url },
+        { name = "LB_TARGET_URL", value = local.consumer_lb_target },
+        { name = "SQS_WAIT", value = "20" },
+        { name = "SQS_BATCH", value = "10" },
+        { name = "SQS_VISIBILITY", value = "60" },
+        { name = "HTTP_TIMEOUT", value = "30" }
       ]
     }
   ])
@@ -794,6 +781,7 @@ resource "aws_ecs_task_definition" "bff_td" {
   memory                   = "512"
   execution_role_arn       = aws_iam_role.bff_exec_role.arn
   task_role_arn            = aws_iam_role.bff_app_role.arn
+
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "X86_64"
