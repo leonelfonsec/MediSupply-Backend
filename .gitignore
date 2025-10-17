@@ -45,3 +45,5 @@ override.tf.json
 # tfvars reales (mantén solo .example en git)
 *.tfvars
 !terraform.tfvars.example
+.env
+.DS_Store
