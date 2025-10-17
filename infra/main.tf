@@ -339,7 +339,7 @@ resource "aws_cloudwatch_log_group" "orders" {
 }
 
 # ============================================================
-# ECS TASK DEFINITION de ORDERS (tu servicio ya existente)
+# ECS TASK DEFINITION de ORDERS
 # ============================================================
 resource "aws_ecs_task_definition" "orders" {
   family                   = "orders"
@@ -541,6 +541,14 @@ resource "aws_security_group" "haproxy_consumer_sg" {
     cidr_blocks = ["0.0.0.0/0"]
     description = "Allow all egress"
   }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all egress"
+  }
+
 
   tags = { Project = var.project, Env = var.env }
 }
@@ -621,10 +629,232 @@ resource "aws_ecs_service" "haproxy_consumer_svc" {
   deployment_minimum_healthy_percent = 50
   deployment_maximum_percent         = 200
 
-  tags = { Project = var.project, Env = var.env }
-
   depends_on = [
     aws_sqs_queue.haproxy_consumer_orders_events_fifo,
     aws_cloudwatch_log_group.haproxy_consumer_lg
   ]
+
+  tags = { Project = var.project, Env = var.env }
+}
+
+# ============================================================
+# BFF VENTA (ALB público + ECS Fargate)
+# ============================================================
+locals {
+  bff_id = "${var.project}-${var.env}-${var.bff_name}"
+}
+
+resource "aws_ecr_repository" "bff" {
+  name         = var.bff_repo_name
+  force_delete = true
+  image_scanning_configuration { scan_on_push = true }
+  tags = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_cloudwatch_log_group" "bff" {
+  name              = "/ecs/${local.bff_id}"
+  retention_in_days = 14
+  tags              = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+data "aws_iam_policy_document" "bff_tasks_assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "bff_exec_role" {
+  name               = "${local.bff_id}-exec-role"
+  assume_role_policy = data.aws_iam_policy_document.bff_tasks_assume.json
+  tags               = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_iam_role_policy_attachment" "bff_exec_attach" {
+  role       = aws_iam_role.bff_exec_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+resource "aws_iam_role" "bff_app_role" {
+  name               = "${local.bff_id}-task-role"
+  assume_role_policy = data.aws_iam_policy_document.bff_tasks_assume.json
+  tags               = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+data "aws_iam_policy_document" "bff_sqs_producer" {
+  statement {
+    actions   = ["sqs:SendMessage", "sqs:GetQueueAttributes", "sqs:GetQueueUrl"]
+    resources = [aws_sqs_queue.haproxy_consumer_orders_events_fifo.arn]
+  }
+}
+
+resource "aws_iam_policy" "bff_sqs_producer" {
+  name   = "${local.bff_id}-sqs-producer"
+  policy = data.aws_iam_policy_document.bff_sqs_producer.json
+}
+
+resource "aws_iam_role_policy_attachment" "bff_app_attach_sqs" {
+  role       = aws_iam_role.bff_app_role.name
+  policy_arn = aws_iam_policy.bff_sqs_producer.arn
+}
+
+resource "aws_security_group" "bff_alb_sg" {
+  name        = "${local.bff_id}-alb-sg"
+  description = "ALB SG for ${var.bff_name}"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTP"
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_security_group" "bff_svc_sg" {
+  name        = "${local.bff_id}-svc-sg"
+  description = "Service SG for ${var.bff_name}"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    from_port       = var.bff_app_port
+    to_port         = var.bff_app_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.bff_alb_sg.id]
+    description     = "Traffic from ALB"
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_lb" "bff_alb" {
+  name               = "${local.bff_id}-alb"
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.bff_alb_sg.id]
+  subnets            = module.vpc.public_subnets
+  idle_timeout       = 60
+  tags               = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_lb_target_group" "bff_tg" {
+  name        = "${local.bff_id}-tg"
+  port        = var.bff_app_port
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = module.vpc.vpc_id
+
+  health_check {
+    enabled             = true
+    path                = "/health"
+    protocol            = "HTTP"
+    matcher             = "200-399"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+
+  tags = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_lb_listener" "bff_http" {
+  load_balancer_arn = aws_lb.bff_alb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.bff_tg.arn
+  }
+}
+
+resource "aws_ecs_task_definition" "bff_td" {
+  family                   = local.bff_id
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.bff_exec_role.arn
+  task_role_arn            = aws_iam_role.bff_app_role.arn
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "X86_64"
+  }
+
+  container_definitions = jsonencode([
+    {
+      name         = var.bff_name,
+      image        = "${aws_ecr_repository.bff.repository_url}:latest",
+      essential    = true,
+      portMappings = [{ containerPort = var.bff_app_port, hostPort = var.bff_app_port, protocol = "tcp" }],
+      logConfiguration = {
+        logDriver = "awslogs",
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.bff.name,
+          awslogs-region        = var.aws_region,
+          awslogs-stream-prefix = var.bff_name
+        }
+      },
+      environment = concat(
+        [for k, v in var.bff_env : { name = k, value = v }],
+        [
+          { name = "SQS_QUEUE_URL", value = aws_sqs_queue.haproxy_consumer_orders_events_fifo.url }
+        ]
+      ),
+      healthCheck = {
+        command     = ["CMD-SHELL", "curl -f http://localhost:${var.bff_app_port}/health || exit 1"],
+        interval    = 30,
+        timeout     = 5,
+        retries     = 3,
+        startPeriod = 20
+      }
+    }
+  ])
+
+  tags = { Project = var.project, Env = var.env, Component = var.bff_name }
+}
+
+resource "aws_ecs_service" "bff_svc" {
+  name            = "${local.bff_id}-svc"
+  cluster         = aws_ecs_cluster.orders.id
+  task_definition = aws_ecs_task_definition.bff_td.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = module.vpc.private_subnets
+    security_groups  = [aws_security_group.bff_svc_sg.id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.bff_tg.arn
+    container_name   = var.bff_name
+    container_port   = var.bff_app_port
+  }
+
+  deployment_minimum_healthy_percent = 50
+  deployment_maximum_percent         = 200
+
+  depends_on = [aws_lb_listener.bff_http]
+
+  tags = { Project = var.project, Env = var.env, Component = var.bff_name }
 }

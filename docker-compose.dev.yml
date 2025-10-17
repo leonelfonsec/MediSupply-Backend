@@ -141,6 +141,26 @@ services:
       redis: { condition: service_healthy }
     restart: unless-stopped
 
+  bff-venta:
+    build:
+      context: ./bff-venta
+      dockerfile: Dockerfile
+    container_name: bff-venta
+    ports:
+      - "8001:8000"
+    environment:
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}   # lo tomará de tu entorno/archivo .env
+      # Si tu BFF necesita alguna URL del Orders local detrás de HAProxy, algo tipo:
+      # ORDERS_BASE_URL: http://haproxy:8080
+    volumes:
+      # Credenciales de AWS (Windows):
+      - ${USERPROFILE}/.aws:/root/.aws:ro
+      # En Mac/Linux sería: - ~/.aws:/root/.aws:ro
+    command: >
+      gunicorn -b 0.0.0.0:8000 wsgi:app
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redis_data:
