@@ -268,8 +268,8 @@ module "orders" {
   ecr_image         = var.ecr_image
   app_port          = var.app_port
   db_url_secret_arn = aws_secretsmanager_secret.db_url.arn
-  
-  ecs_cluster_arn = aws_ecs_cluster.orders.arn  # ← AGREGAR
+
+  ecs_cluster_arn = aws_ecs_cluster.orders.arn # ← AGREGAR
 }
 
 # Consumer (SQS + Worker)
@@ -285,8 +285,8 @@ module "consumer" {
 
   use_haproxy      = var.use_haproxy
   bff_alb_dns_name = module.bff_venta.alb_dns_name
-  
-  ecs_cluster_arn = aws_ecs_cluster.orders.arn  # ← AGREGAR
+
+  ecs_cluster_arn = aws_ecs_cluster.orders.arn # ← AGREGAR
 }
 
 # BFF Venta
@@ -304,10 +304,44 @@ module "bff_venta" {
   bff_name      = var.bff_name
   bff_app_port  = var.bff_app_port
   bff_repo_name = var.bff_repo_name
-  bff_env       = var.bff_env
+  bff_env = merge(
+    var.bff_env,
+    {
+      RUTAS_SERVICE_URL = "http://${module.rutas_service.alb_dns_name}"  # ← ESTO
+    }
+  )
 
-  sqs_url         = module.consumer.sqs_queue_url
-  sqs_arn         = module.consumer.sqs_queue_arn    # ← AGREGAR ESTA LÍNEA
-  
+  sqs_url = module.consumer.sqs_queue_url
+  sqs_arn = module.consumer.sqs_queue_arn # ← AGREGAR ESTA LÍNEA
+
   ecs_cluster_arn = aws_ecs_cluster.orders.arn
+}
+
+# Rutas Service
+module "rutas_service" {
+  source = "./modules/rutas_service"
+
+  project    = var.project
+  env        = var.env
+  aws_region = var.aws_region
+
+  service_name = "rutas"
+
+  vpc_id          = module.vpc.vpc_id
+  public_subnets  = module.vpc.public_subnets
+  private_subnets = module.vpc.private_subnets
+
+  ecs_cluster_arn = aws_ecs_cluster.orders.arn
+
+  # Usa la misma DB que orders (o crea una nueva si necesitas)
+  db_url_secret_arn = aws_secretsmanager_secret.db_url.arn
+
+  # Configuración del servicio
+  app_port      = 8000
+  image_tag     = "latest"
+  desired_count = 1
+  cpu           = "512"
+  memory        = "1024"
+
+  health_check_path = "/health"
 }

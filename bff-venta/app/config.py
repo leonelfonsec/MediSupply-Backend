@@ -14,3 +14,6 @@ class Config:
 
     # Flask
     JSON_SORT_KEYS = False
+
+     # Rutas Service Configuration
+    RUTAS_SERVICE_URL = os.getenv("RUTAS_SERVICE_URL")
