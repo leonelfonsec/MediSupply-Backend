@@ -11,6 +11,61 @@ executor = ThreadPoolExecutor(max_workers=10)
 
 @bp.post("/api/v1/orders")
 def post_message():
+    """
+    Create a new order (async via SQS)
+    ---
+    tags:
+      - Orders
+    parameters:
+      - in: body
+        name: body
+        description: Order data
+        required: true
+        schema:
+          type: object
+          required:
+            - body
+          properties:
+            body:
+              type: object
+              description: Order details
+              example:
+                customer_id: "123"
+                items:
+                  - product_id: "ABC"
+                    quantity: 2
+            group_id:
+              type: string
+              description: SQS Message Group ID
+              example: "customer-123"
+            dedup_id:
+              type: string
+              description: Deduplication ID
+              example: "order-456"
+    responses:
+      202:
+        description: Order accepted
+        schema:
+          type: object
+          properties:
+            messageId:
+              type: string
+              example: "async-uuid-here"
+            event_id:
+              type: string
+              example: "uuid-here"
+            status:
+              type: string
+              example: "accepted"
+      400:
+        description: Validation error
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Falta 'body' en el JSON"
+    """
     data = request.get_json(silent=True) or {}
     body = data.get("body")
     if not body:
