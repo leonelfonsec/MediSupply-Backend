@@ -1,4 +1,4 @@
-name: "02 - Verify PR -> develop"
+name: "02 - Verify PR -> develop (Orders Service)"
 
 on:
   pull_request:
@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 env:
   PYTHON_VERSION: '3.11'
@@ -44,18 +45,19 @@ jobs:
       - name: Run tests + coverage.xml
         run: |
           cd "${{ env.SERVICE_DIR }}"
+          export PYTHONPATH="${PYTHONPATH}:$(pwd)"
           pytest -q --maxfail=1 --disable-warnings --cov=app --cov-branch
           python -m coverage xml -i -o coverage.xml
           
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-xml
+          name: coverage-xml-orders-service
           path: ${{ env.SERVICE_DIR }}/coverage.xml
           if-no-files-found: error
 
   sonar:
-    name: SonarCloud análisis (rama develop)
+    name: SonarCloud análisis (Orders Service)
     needs: [tests]
     runs-on: ubuntu-latest
     env:
@@ -69,7 +71,7 @@ jobs:
       - name: Download coverage artifact
         uses: actions/download-artifact@v4
         with:
-          name: coverage-xml
+          name: coverage-xml-orders-service
           path: ${{ env.SERVICE_DIR }}
           
       - name: SonarCloud Scan (PR)
@@ -84,30 +86,34 @@ jobs:
         env:
           SONAR_HOST_URL: "https://sonarcloud.io"
 
-  enable_automerge:
-    name: Enable auto-merge
-    needs: [tests, sonar]
-    runs-on: ubuntu-latest
-    # Solo activar auto-merge si:
-    # 1. Tiene la label 'automerge' o 'integrar', O
-    # 2. Viene de una rama feature/feat, O
-    # 3. Tiene la palabra 'integrar' en título o body
-    if: |
-      contains(github.event.pull_request.labels.*.name, 'automerge') ||
-      contains(github.event.pull_request.labels.*.name, 'integrar') ||
-      startsWith(github.head_ref, 'feature/') ||
-      startsWith(github.head_ref, 'feat/') ||
-      contains(github.event.pull_request.title, 'integrar') ||
-      contains(github.event.pull_request.body, 'integrar')
-    steps:
-      - name: Enable auto-merge
-        uses: peter-evans/enable-pull-request-automerge@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ github.event.pull_request.number }}
-          merge-method: squash
-          
-      - name: Confirmation
-        run: |
-          echo "✅ Auto-merge activado para PR #${{ github.event.pull_request.number }}"
-          echo "🔄 Se hará merge automáticamente cuando todos los checks pasen"
+  # ========================================
+  # ⚠️ COMENTADO: Auto-merge requiere permisos de organización
+  # Para habilitar:
+  # 1. Owner de la org debe ir a: https://github.com/organizations/MediSupply-Team/settings/actions
+  # 2. Marcar "Allow GitHub Actions to create and approve pull requests"
+  # 3. Descomentar el job completo
+  # ========================================
+  
+  # enable_automerge:
+  #   name: Enable auto-merge
+  #   needs: [tests, sonar]
+  #   runs-on: ubuntu-latest
+  #   if: |
+  #     contains(github.event.pull_request.labels.*.name, 'automerge') ||
+  #     contains(github.event.pull_request.labels.*.name, 'integrar') ||
+  #     startsWith(github.head_ref, 'feature/') ||
+  #     startsWith(github.head_ref, 'feat/') ||
+  #     contains(github.event.pull_request.title, 'integrar') ||
+  #     contains(github.event.pull_request.body, 'integrar')
+  #   steps:
+  #     - name: Enable auto-merge
+  #       uses: peter-evans/enable-pull-request-automerge@v3
+  #       with:
+  #         token: ${{ secrets.PAT_TOKEN }}
+  #         pull-request-number: ${{ github.event.pull_request.number }}
+  #         merge-method: squash
+  #         
+  #     - name: Confirmation
+  #       run: |
+  #         echo "✅ Auto-merge activado para PR #${{ github.event.pull_request.number }}"
+  #         echo "🔄 Se hará merge automáticamente cuando todos los checks pasen"
