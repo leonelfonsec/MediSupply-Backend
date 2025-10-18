@@ -168,3 +168,63 @@ output "haproxy_consumer_tail_logs" {
   description = "Comando para seguir logs del componente en CloudWatch"
   value       = "aws logs tail ${aws_cloudwatch_log_group.haproxy_consumer_lg.name} --follow --region ${var.aws_region}"
 }
+
+# ============================================================
+# CATALOGO-SERVICE OUTPUTS
+# ============================================================
+output "catalogo_db_endpoint" {
+  description = "RDS PostgreSQL endpoint for catalogo-service"
+  value       = aws_db_instance.catalogo_postgres.endpoint
+}
+
+output "catalogo_db_address" {
+  description = "RDS PostgreSQL address for catalogo-service"
+  value       = aws_db_instance.catalogo_postgres.address
+}
+
+output "catalogo_db_name" {
+  description = "Database name for catalogo-service"
+  value       = aws_db_instance.catalogo_postgres.db_name
+}
+
+output "catalogo_db_username" {
+  description = "Database username for catalogo-service"
+  value       = aws_db_instance.catalogo_postgres.username
+  sensitive   = true
+}
+
+output "catalogo_db_url_secret_arn" {
+  description = "Secrets Manager ARN for catalogo DATABASE_URL"
+  value       = aws_secretsmanager_secret.catalogo_db_url.arn
+}
+
+output "catalogo_redis_url_secret_arn" {
+  description = "Secrets Manager ARN for catalogo REDIS_URL"
+  value       = aws_secretsmanager_secret.catalogo_redis_url.arn
+}
+
+output "catalogo_ecr_repository_url" {
+  description = "ECR repository URL for catalogo-service"
+  value       = aws_ecr_repository.catalogo.repository_url
+}
+
+output "catalogo_ecs_service_name" {
+  description = "ECS service name for catalogo-service"
+  value       = aws_ecs_service.catalogo.name
+}
+
+output "catalogo_log_group" {
+  description = "CloudWatch log group for catalogo-service"
+  value       = aws_cloudwatch_log_group.catalogo.name
+}
+
+output "catalogo_tail_logs" {
+  description = "Command to view catalogo-service logs"
+  value       = "aws logs tail ${aws_cloudwatch_log_group.catalogo.name} --follow --region ${var.aws_region}"
+}
+
+# Comandos útiles para catalogo-service
+output "catalogo_psql_connect" {
+  description = "Command to connect to catalogo database"
+  value       = "export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id catalogo/DB_URL --query SecretString --output text | sed 's/.*:\\/\\/.*:\\(.*\\)@.*/\\1/'); psql -h ${aws_db_instance.catalogo_postgres.address} -U ${aws_db_instance.catalogo_postgres.username} -d ${aws_db_instance.catalogo_postgres.db_name}"
+}

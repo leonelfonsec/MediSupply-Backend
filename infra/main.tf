@@ -628,3 +628,305 @@ resource "aws_ecs_service" "haproxy_consumer_svc" {
     aws_cloudwatch_log_group.haproxy_consumer_lg
   ]
 }
+
+# ============================================================
+# CATALOGO-SERVICE INFRASTRUCTURE
+# ============================================================
+
+# ECR Repository para catalogo-service
+resource "aws_ecr_repository" "catalogo" {
+  name                 = "${var.project}-${var.env}-catalogo-service"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "AES256"
+  }
+
+  tags = {
+    Service   = "catalogo"
+    Project   = var.project
+    Env       = var.env
+    ManagedBy = "Terraform"
+  }
+}
+
+# Security Group para catalogo ECS
+resource "aws_security_group" "catalogo_ecs_sg" {
+  name        = "catalogo-ecs-sg"
+  description = "Security group for Catalogo ECS Service"
+  vpc_id      = module.vpc.vpc_id
+
+  # Permitir tráfico HTTP desde dentro de la VPC
+  ingress {
+    from_port   = var.catalogo_app_port
+    to_port     = var.catalogo_app_port
+    protocol    = "tcp"
+    cidr_blocks = [module.vpc.vpc_cidr_block]
+    description = "Allow HTTP from VPC"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name      = "catalogo-ecs-sg"
+    Service   = "catalogo"
+    Project   = var.project
+    Env       = var.env
+  }
+}
+
+# Security Group para catalogo PostgreSQL
+resource "aws_security_group" "catalogo_postgres_sg" {
+  name        = "catalogo-postgres-sg"
+  description = "Security group for Catalogo PostgreSQL RDS"
+  vpc_id      = module.vpc.vpc_id
+
+  # Acceso desde ECS catalogo
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.catalogo_ecs_sg.id]
+    description     = "Allow PostgreSQL from Catalogo ECS"
+  }
+
+  # ⚠️ TEMP: acceso abierto a Internet (quitar cuando termines)
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "TEMP: Allow PostgreSQL from anywhere"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name      = "catalogo-postgres-sg"
+    Service   = "catalogo"
+    Project   = var.project
+    Env       = var.env
+  }
+}
+
+# RDS PostgreSQL para catalogo-service
+resource "random_password" "catalogo_db_password" {
+  length           = 24
+  special          = true
+  override_special = "-_."
+}
+
+resource "aws_db_instance" "catalogo_postgres" {
+  identifier = "catalogo-postgres"
+
+  engine         = "postgres"
+  engine_version = "15.14"
+  instance_class = "db.t4g.micro"
+
+  allocated_storage     = 20
+  max_allocated_storage = 100
+  storage_type          = "gp2"
+  storage_encrypted     = true
+
+  db_name  = "catalogo"
+  username = "catalogo_user"
+  password = random_password.catalogo_db_password.result
+  port     = 5432
+
+  publicly_accessible  = true
+  apply_immediately    = true
+  db_subnet_group_name = aws_db_subnet_group.postgres_public.name
+
+  vpc_security_group_ids = [aws_security_group.catalogo_postgres_sg.id]
+
+  multi_az                = false
+  backup_retention_period = 7
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "sun:04:00-sun:05:00"
+  copy_tags_to_snapshot   = true
+
+  skip_final_snapshot      = true
+  deletion_protection      = false
+  delete_automated_backups = true
+
+  enabled_cloudwatch_logs_exports       = ["postgresql", "upgrade"]
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
+  monitoring_interval                   = 60
+  monitoring_role_arn                   = aws_iam_role.rds_monitoring.arn
+
+  auto_minor_version_upgrade = true
+  parameter_group_name       = aws_db_parameter_group.postgres.name
+
+  tags = {
+    Service    = "catalogo"
+    Project    = var.project
+    Env        = var.env
+    ManagedBy  = "Terraform"
+    Purpose    = "School Project - Production Simulation"
+    CostCenter = "Education"
+  }
+}
+
+# Secrets Manager para catalogo-service
+resource "aws_secretsmanager_secret" "catalogo_db_url" {
+  name                    = "catalogo/DB_URL"
+  description             = "Database connection URL for Catalogo service"
+  recovery_window_in_days = 7
+  tags = {
+    Service = "catalogo"
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "catalogo_db_url_v" {
+  secret_id     = aws_secretsmanager_secret.catalogo_db_url.id
+  secret_string = "postgresql+asyncpg://${aws_db_instance.catalogo_postgres.username}:${urlencode(random_password.catalogo_db_password.result)}@${aws_db_instance.catalogo_postgres.address}:${aws_db_instance.catalogo_postgres.port}/${aws_db_instance.catalogo_postgres.db_name}"
+}
+
+resource "aws_secretsmanager_secret" "catalogo_redis_url" {
+  name                    = "catalogo/REDIS_URL"
+  description             = "Redis connection URL for Catalogo service"
+  recovery_window_in_days = 7
+  tags = {
+    Service = "catalogo"
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+resource "aws_secretsmanager_secret_version" "catalogo_redis_url_v" {
+  secret_id     = aws_secretsmanager_secret.catalogo_redis_url.id
+  secret_string = "redis://:${urlencode("redis_password_123")}@redis-cluster.abc123.cache.amazonaws.com:6379/1"
+}
+
+# CloudWatch Log Group para catalogo-service
+resource "aws_cloudwatch_log_group" "catalogo" {
+  name              = "/ecs/catalogo"
+  retention_in_days = 7
+  tags = {
+    Service = "catalogo"
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+# ECS Task Definition para catalogo-service
+resource "aws_ecs_task_definition" "catalogo" {
+  family                   = "catalogo"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "512"
+  memory                   = "1024"
+  execution_role_arn       = aws_iam_role.task_exec_role.arn
+  task_role_arn           = aws_iam_role.task_app_role.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "catalogo"
+      image     = var.catalogo_ecr_image
+      essential = true
+      
+      portMappings = [
+        {
+          containerPort = var.catalogo_app_port
+          hostPort      = var.catalogo_app_port
+          protocol      = "tcp"
+        }
+      ]
+
+      environment = [
+        {
+          name  = "ENV"
+          value = var.env
+        },
+        {
+          name  = "PORT"
+          value = tostring(var.catalogo_app_port)
+        }
+      ]
+
+      secrets = [
+        {
+          name      = "DATABASE_URL"
+          valueFrom = aws_secretsmanager_secret.catalogo_db_url.arn
+        },
+        {
+          name      = "REDIS_URL"
+          valueFrom = aws_secretsmanager_secret.catalogo_redis_url.arn
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.catalogo.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "catalogo"
+        }
+      }
+
+      healthCheck = {
+        command = [
+          "CMD-SHELL",
+          "curl -f http://localhost:${var.catalogo_app_port}/health || exit 1"
+        ]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
+      }
+    }
+  ])
+
+  tags = {
+    Service = "catalogo"
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+# ECS Service para catalogo-service
+resource "aws_ecs_service" "catalogo" {
+  name            = "catalogo-svc"
+  cluster         = aws_ecs_cluster.orders.id
+  task_definition = aws_ecs_task_definition.catalogo.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = module.vpc.private_subnets
+    security_groups  = [aws_security_group.catalogo_ecs_sg.id]
+    assign_public_ip = false
+  }
+
+  deployment_minimum_healthy_percent = 50
+  deployment_maximum_percent         = 200
+
+  tags = {
+    Service = "catalogo"
+    Project = var.project
+    Env     = var.env
+  }
+
+  depends_on = [
+    aws_db_instance.catalogo_postgres,
+    aws_cloudwatch_log_group.catalogo
+  ]
+}
