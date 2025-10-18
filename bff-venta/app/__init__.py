@@ -4,6 +4,7 @@ from .config import Config
 from .services.sqs_client import SQSService
 from .routes.health import bp as health_bp
 from .routes.orders import bp as orders_bp
+from .routes.rutas import bp as rutas_bp
 
 def create_app():
     load_dotenv()               # carga variables desde .env si existe
@@ -13,6 +14,7 @@ def create_app():
     # Registrar blueprints (rutas)
     app.register_blueprint(health_bp)
     app.register_blueprint(orders_bp)
+    app.register_blueprint(rutas_bp)
 
     # Inicializar servicio SQS y guardarlo en extensiones
     app.extensions["sqs"] = SQSService(

@@ -1,0 +1,101 @@
+name: Deploy Rutas Service
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+    paths:
+      - "ruta-service/**"                 # <-- si renombraste a rutas-service/, cámbialo aquí
+      - ".github/workflows/deploy-rutas.yml"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch/Tag/Commit a desplegar"
+        required: true
+        default: "develop"
+
+env:
+  AWS_REGION: us-east-1
+  # Repositorio ECR (debe existir o lo creas con Terraform): rutas-service
+  ECR_REPOSITORY: rutas-service
+  # Cluster ECS donde corre (usa el mismo si así lo planearon)
+  ECS_CLUSTER: orders-cluster
+  # Nombre del SERVICE en ECS (define esto en Terraform; sugerido)
+  ECS_SERVICE: rutas-svc
+  # Nombre del contenedor dentro de la Task Definition (en nuestro TF = rutas-service)
+  CONTAINER_NAME: rutas-service
+  # Nombre de la Task Definition family (en nuestro TF = rutas-service)
+  TASK_DEFINITION_NAME: rutas-service
+  # Directorio donde está el Dockerfile del servicio en el repo
+  CODE_DIR: ruta-service
+  # Tag de la imagen (por defecto el SHA del commit)
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout (rama indicada o contexto del push)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::838693051133:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+        working-directory: ./${{ env.CODE_DIR }}
+        run: |
+          IMAGE_URI=${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}
+          docker build -t "${IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+          echo "image=${IMAGE_URI}" >> $GITHUB_OUTPUT
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${{ env.TASK_DEFINITION_NAME }}" \
+            --query 'taskDefinition' > task-definition.json
+
+      - name: Fill new image in task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy task definition to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      - name: Post-deploy status
+        run: |
+          aws ecs describe-services \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.ECS_SERVICE }}" \
+            --query "services[0].{status:status,desired:desiredCount,running:runningCount,taskDef:taskDefinition}" \
+            --output table
+          aws ecs describe-services \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.ECS_SERVICE }}" \
+            --query "services[0].events[0:10].[createdAt,message]" \
+            --output table
