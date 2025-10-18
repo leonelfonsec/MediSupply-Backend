@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main", "develop" ]
     paths:
-      - "ruta-service/**"                 # <-- si renombraste a rutas-service/, cámbialo aquí
+      - "ruta-service/**"
       - ".github/workflows/deploy-rutas.yml"
   workflow_dispatch:
     inputs:
@@ -15,19 +15,10 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  # Repositorio ECR (debe existir o lo creas con Terraform): rutas-service
-  ECR_REPOSITORY: rutas-service
-  # Cluster ECS donde corre (usa el mismo si así lo planearon)
-  ECS_CLUSTER: orders-cluster
-  # Nombre del SERVICE en ECS (define esto en Terraform; sugerido)
-  ECS_SERVICE: rutas-svc
-  # Nombre del contenedor dentro de la Task Definition (en nuestro TF = rutas-service)
-  CONTAINER_NAME: rutas-service
-  # Nombre de la Task Definition family (en nuestro TF = rutas-service)
-  TASK_DEFINITION_NAME: rutas-service
-  # Directorio donde está el Dockerfile del servicio en el repo
-  CODE_DIR: ruta-service
-  # Tag de la imagen (por defecto el SHA del commit)
+  ECR_REPOSITORY: medisupply-dev-rutas          
+  ECS_CLUSTER: medisupply-dev-cluster            
+  ECS_SERVICE: medisupply-dev-rutas-svc          
+  CONTAINER_NAME: rutas                           
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -58,17 +49,22 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-        working-directory: ./${{ env.CODE_DIR }}
+        working-directory: ./ruta-service
         run: |
           IMAGE_URI=${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${TAG}
           docker build -t "${IMAGE_URI}" .
           docker push "${IMAGE_URI}"
+          
+          # También pushear con tag latest
+          docker tag "${IMAGE_URI}" "${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest"
+          docker push "${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest"
+          
           echo "image=${IMAGE_URI}" >> $GITHUB_OUTPUT
 
       - name: Download current task definition
         run: |
           aws ecs describe-task-definition \
-            --task-definition "${{ env.TASK_DEFINITION_NAME }}" \
+            --task-definition medisupply-dev-rutas \
             --query 'taskDefinition' > task-definition.json
 
       - name: Fill new image in task definition
