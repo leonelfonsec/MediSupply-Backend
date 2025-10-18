@@ -18,15 +18,31 @@ def get_rutas_service_url():
 def get_ruta_by_fecha(fecha):
     """
     Obtener ruta de visita por fecha
-    
-    Args:
-        fecha: Fecha en formato YYYY-MM-DD
-    
-    Returns:
-        JSON con la ruta o error
-    
-    Example:
-        GET /api/v1/rutas/visita/2025-01-15
+    ---
+    tags:
+      - Rutas
+    parameters:
+      - in: path
+        name: fecha
+        type: string
+        required: true
+        description: Fecha en formato YYYY-MM-DD
+        example: "2025-01-15"
+    responses:
+      200:
+        description: Ruta encontrada
+        schema:
+          type: object
+          properties:
+            data:
+              type: object
+              description: Datos de la ruta
+      404:
+        description: Ruta no encontrada
+      503:
+        description: Servicio no disponible
+      504:
+        description: Timeout al consultar servicio
     """
     rutas_url = get_rutas_service_url()
     if not rutas_url:
@@ -89,10 +105,26 @@ def get_ruta_by_fecha(fecha):
 @bp.get("/api/v1/rutas/health")
 def rutas_health_check():
     """
-    Health check que verifica conectividad con el servicio de rutas
-    
-    Returns:
-        JSON con estado del servicio
+    Health check del servicio de rutas
+    ---
+    tags:
+      - Rutas
+    responses:
+      200:
+        description: Servicio conectado
+        schema:
+          type: object
+          properties:
+            status:
+              type: string
+              example: "healthy"
+            rutas_service:
+              type: string
+              example: "connected"
+            rutas_url:
+              type: string
+      503:
+        description: Servicio no disponible
     """
     rutas_url = get_rutas_service_url()
     
